@@ -2,6 +2,7 @@ package router
 
 import (
 	"io/fs"
+	"log/slog"
 	"mime"
 	"net/http"
 	"os"
@@ -55,7 +56,8 @@ func New(d Deps) *gin.Engine {
 		v1.GET("/datasources/:key/dim-values", d.QH.DimValues)
 	}
 
-	mountSPA(r, d.Config.StaticDir)
+	source := mountSPA(r, d.Config.StaticDir)
+	slog.Info("frontend source resolved", "source", source, "static_dir", d.Config.StaticDir)
 	return r
 }
 
@@ -64,11 +66,17 @@ func New(d Deps) *gin.Engine {
 //   - 否则使用 go:embed 的 dist。
 //
 // 未命中的非 API 路径统一回落到 index.html，保证前端路由刷新不 404。
-func mountSPA(r *gin.Engine, staticDir string) {
+func mountSPA(r *gin.Engine, staticDir string) string {
 	var fsys fs.FS
+	source := "embed"
 	if staticDir != "" {
 		if _, err := os.Stat(staticDir); err == nil {
 			fsys = os.DirFS(staticDir)
+			source = "disk"
+		} else {
+			// 这里刻意打日志：目录不存在会静默回退到编译期 embed 的旧产物，
+			// 表现是「改了前端但页面没变」，很难排查。
+			slog.Warn("STATIC_DIR not found, falling back to embedded frontend", "dir", staticDir)
 		}
 	}
 	if fsys == nil {
@@ -79,7 +87,7 @@ func mountSPA(r *gin.Engine, staticDir string) {
 		r.NoRoute(func(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "not found"})
 		})
-		return
+		return "none"
 	}
 
 	// 这里刻意不使用 gin 的 c.FileFromFS：它会把 URL.Path 改写成目标文件名，
@@ -131,4 +139,5 @@ func mountSPA(r *gin.Engine, staticDir string) {
 		}
 		index(c)
 	})
+	return source
 }
