@@ -37,6 +37,10 @@ export default function QueryBuilder(props: Props) {
     onExecute, loading,
   } = props;
 
+  // 有中文含义就显示「中文（key）」，没有就退回 key
+  const labelMap = selected?.label_map ?? {};
+  const optionLabel = (k: string) => (labelMap[k] ? `${labelMap[k]}（${k}）` : k);
+
   const dimOptions = Object.keys(selected?.dim_map ?? {}).sort();
   const mtxOptions = Object.keys(selected?.mtx_map ?? {}).sort();
   const sortableOptions = [...dims, ...metrics];
@@ -82,7 +86,7 @@ export default function QueryBuilder(props: Props) {
           disabled={!selected}
           value={dims}
           onChange={onDimsChange}
-          options={dimOptions.map((k) => ({ value: k, label: k }))}
+          options={dimOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
         />
       </div>
 
@@ -97,7 +101,7 @@ export default function QueryBuilder(props: Props) {
           disabled={!selected}
           value={metrics}
           onChange={onMetricsChange}
-          options={mtxOptions.map((k) => ({ value: k, label: k }))}
+          options={mtxOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
         />
       </div>
 
@@ -130,7 +134,7 @@ export default function QueryBuilder(props: Props) {
                 <Select
                   style={{ width: '32%' }}
                   value={f.field}
-                  options={dimOptions.map((k) => ({ value: k, label: k }))}
+                  options={dimOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
                   onChange={(v) => {
                     updateFilter(i, { field: v, value: '', values: [] });
                     onRequestDimValues(v);
@@ -192,7 +196,7 @@ export default function QueryBuilder(props: Props) {
             allowClear
             placeholder="字段（维度或指标）"
             value={orderBy?.field}
-            options={sortableOptions.map((k) => ({ value: k, label: k }))}
+            options={sortableOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
             onChange={(v) => onOrderByChange(v ? { field: v, desc: orderBy?.desc ?? true } : null)}
           />
           <Select

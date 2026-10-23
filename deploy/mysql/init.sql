@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS `datasource_config` (
   `mid_sql`         MEDIUMTEXT    NOT NULL COMMENT '中间层 SQL，纯文本存储，不做语法校验',
   `dim_map`         JSON          NOT NULL COMMENT '维度映射 map[string]string',
   `mtx_map`         JSON          NOT NULL COMMENT '指标映射 map[string]string',
+  `label_map`       JSON          NOT NULL DEFAULT (JSON_OBJECT()) COMMENT '维度/指标的中文含义，key 对应 dim_map/mtx_map 的键，仅影响展示',
   `status`          TINYINT       NOT NULL DEFAULT 1 COMMENT '1 启用 0 停用',
   `version`         INT           NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
   `created_by`      VARCHAR(64)   NOT NULL DEFAULT '' COMMENT '创建人',

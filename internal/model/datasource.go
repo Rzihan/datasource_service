@@ -26,6 +26,9 @@ type DatasourceConfig struct {
 	MidSQL         string            `json:"mid_sql" gorm:"column:mid_sql;type:mediumtext;not null"`
 	DimMap         map[string]string `json:"dim_map" gorm:"column:dim_map;type:json;serializer:json;not null"`
 	MtxMap         map[string]string `json:"mtx_map" gorm:"column:mtx_map;type:json;serializer:json;not null"`
+	// LabelMap 描述维度与指标的中文含义，key 是 dim_map / mtx_map 里的键。
+	// 只影响展示（勾选控件、表头），不参与 SQL 生成。
+	LabelMap map[string]string `json:"label_map" gorm:"column:label_map;type:json;serializer:json;not null"`
 	Status         int8              `json:"status" gorm:"column:status;type:tinyint;not null;default:1"`
 	Version        int               `json:"version" gorm:"column:version;type:int;not null;default:0"`
 	CreatedBy      string            `json:"created_by" gorm:"column:created_by;type:varchar(64);not null;default:''"`
@@ -47,6 +50,7 @@ type CreateRequest struct {
 	MidSQL         string            `json:"mid_sql"`
 	DimMap         map[string]string `json:"dim_map"`
 	MtxMap         map[string]string `json:"mtx_map"`
+	LabelMap       map[string]string `json:"label_map"`
 	Status         *int8             `json:"status"`
 }
 
@@ -56,14 +60,16 @@ type UpdateRequest struct {
 	MidSQL         string            `json:"mid_sql"`
 	DimMap         map[string]string `json:"dim_map"`
 	MtxMap         map[string]string `json:"mtx_map"`
+	LabelMap       map[string]string `json:"label_map"`
 	Status         *int8             `json:"status"`
 	Version        int               `json:"version"`
 }
 
 // ValidateRequest 只校验不落库的请求体，供前端实时校验使用。
 type ValidateRequest struct {
-	DimMap map[string]string `json:"dim_map"`
-	MtxMap map[string]string `json:"mtx_map"`
+	DimMap   map[string]string `json:"dim_map"`
+	MtxMap   map[string]string `json:"mtx_map"`
+	LabelMap map[string]string `json:"label_map"`
 }
 
 // ListQuery 列表查询参数。

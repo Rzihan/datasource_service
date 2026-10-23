@@ -141,7 +141,7 @@ export default function QueryPage() {
               description={error}
             />
           )}
-          <ResultView result={result} dims={dims} metrics={metrics} />
+          <ResultView result={result} dims={dims} metrics={metrics} labelMap={selected?.label_map ?? {}} />
         </Card>
       </Col>
     </Row>

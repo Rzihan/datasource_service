@@ -1,6 +1,6 @@
 import { Suspense, lazy, useMemo, useState } from 'react';
-import { Empty, Select, Skeleton, Space, Table, Tabs, Tag, Typography } from 'antd';
-import type { QueryResult } from '../types';
+import { Empty, Select, Skeleton, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
+import type { QueryResult, StringMap } from '../types';
 
 const ChartView = lazy(() => import('./ChartView'));
 
@@ -8,6 +8,18 @@ interface Props {
   result: QueryResult | null;
   dims: string[];
   metrics: string[];
+  labelMap: StringMap;
+}
+
+// 表头显示中文含义，原始字段名收进 Tooltip，方便对照 SQL 和下游对接
+function columnTitle(name: string, labelMap: StringMap) {
+  const label = labelMap[name];
+  if (!label) return name;
+  return (
+    <Tooltip title={`字段：${name}`}>
+      <span>{label}</span>
+    </Tooltip>
+  );
 }
 
 // 单元格渲染：Decimal 在后端已转成字符串保精度，这里原样展示，不做数值转换。
@@ -21,7 +33,7 @@ function renderCell(value: unknown) {
   return String(value);
 }
 
-export default function ResultView({ result, dims, metrics }: Props) {
+export default function ResultView({ result, dims, metrics, labelMap }: Props) {
   const [tab, setTab] = useState<'table' | 'chart'>('table');
   const [xField, setXField] = useState<string>('');
   const [yField, setYField] = useState<string>('');
@@ -30,7 +42,7 @@ export default function ResultView({ result, dims, metrics }: Props) {
   const columns = useMemo(() => {
     if (!result) return [];
     return result.columns.map((c, i) => ({
-      title: c.name,
+      title: columnTitle(c.name, labelMap),
       dataIndex: `c${i}`,
       key: `c${i}`,
       ellipsis: true,
@@ -118,14 +130,14 @@ export default function ResultView({ result, dims, metrics }: Props) {
                     placeholder="X 轴（维度）"
                     value={effectiveX || undefined}
                     onChange={setXField}
-                    options={dims.map((d) => ({ value: d, label: d }))}
+                    options={dims.map((d) => ({ value: d, label: labelMap[d] ? `${labelMap[d]}（${d}）` : d }))}
                   />
                   <Select
                     style={{ width: 140 }}
                     placeholder="Y 轴（指标）"
                     value={effectiveY || undefined}
                     onChange={setYField}
-                    options={metrics.map((m) => ({ value: m, label: m }))}
+                    options={metrics.map((m) => ({ value: m, label: labelMap[m] ? `${labelMap[m]}（${m}）` : m }))}
                   />
                   <Select
                     style={{ width: 100 }}

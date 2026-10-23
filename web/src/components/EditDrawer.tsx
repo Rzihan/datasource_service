@@ -25,6 +25,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   const [midSQL, setMidSQL] = useState('');
   const [dimMap, setDimMap] = useState<StringMap>({});
   const [mtxMap, setMtxMap] = useState<StringMap>({});
+  const [labelMap, setLabelMap] = useState<StringMap>({});
   const [enabled, setEnabled] = useState(true);
 
   useEffect(() => {
@@ -35,6 +36,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setMidSQL(record.mid_sql);
       setDimMap(record.dim_map ?? {});
       setMtxMap(record.mtx_map ?? {});
+      setLabelMap(record.label_map ?? {});
       setEnabled(record.status === 1);
     } else {
       setKey('');
@@ -42,9 +44,19 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setMidSQL('');
       setDimMap({});
       setMtxMap({});
+      setLabelMap({});
       setEnabled(true);
     }
   }, [open, record]);
+
+  // 把 dim_map / mtx_map 里还没配中文名的键补进来，省得逐个手敲
+  const fillLabels = () => {
+    const next: StringMap = { ...labelMap };
+    for (const k of [...Object.keys(dimMap), ...Object.keys(mtxMap)]) {
+      if (!(k in next)) next[k] = '';
+    }
+    setLabelMap(next);
+  };
 
   const save = async () => {
     if (!key.trim()) {
@@ -67,6 +79,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           mid_sql: midSQL,
           dim_map: dimMap,
           mtx_map: mtxMap,
+          label_map: labelMap,
           status: enabled ? 1 : 0,
           version: record.version,
         });
@@ -78,6 +91,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           mid_sql: midSQL,
           dim_map: dimMap,
           mtx_map: mtxMap,
+          label_map: labelMap,
           status: enabled ? 1 : 0,
         });
         message.success('已创建');
@@ -169,6 +183,25 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
             onChange={setMtxMap}
             placeholderKey="指标名，例如 cost"
             placeholderValue="聚合表达式，例如 sum(stat_cost)"
+          />
+        </Form.Item>
+
+        <Form.Item
+          label="label_map"
+          extra={
+            <Space>
+              <span>维度与指标的中文含义，只影响查询页的展示，不参与 SQL 生成</span>
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={fillLabels}>
+                按维度/指标补齐
+              </Button>
+            </Space>
+          }
+        >
+          <StringMapEditor
+            value={labelMap}
+            onChange={setLabelMap}
+            placeholderKey="维度或指标名，例如 cost"
+            placeholderValue="中文含义，例如 消耗"
           />
         </Form.Item>
       </Form>

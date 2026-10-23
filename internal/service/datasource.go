@@ -59,6 +59,10 @@ func (s *DatasourceService) Create(ctx context.Context, req *model.CreateRequest
 	if err != nil {
 		return nil, err
 	}
+	labelMap, err := normalizeStringMap(req.LabelMap, "label_map")
+	if err != nil {
+		return nil, err
+	}
 	status := model.StatusEnabled
 	if req.Status != nil {
 		status = *req.Status
@@ -74,6 +78,7 @@ func (s *DatasourceService) Create(ctx context.Context, req *model.CreateRequest
 		MidSQL:         req.MidSQL,
 		DimMap:         dimMap,
 		MtxMap:         mtxMap,
+		LabelMap:       labelMap,
 		Status:         status,
 		Version:        0,
 		CreatedBy:      operator,
@@ -135,6 +140,10 @@ func (s *DatasourceService) Update(ctx context.Context, key string, req *model.U
 	if err != nil {
 		return nil, err
 	}
+	labelMap, err := normalizeStringMap(req.LabelMap, "label_map")
+	if err != nil {
+		return nil, err
+	}
 	status := model.StatusEnabled
 	if req.Status != nil {
 		status = *req.Status
@@ -149,6 +158,7 @@ func (s *DatasourceService) Update(ctx context.Context, key string, req *model.U
 		MidSQL:         req.MidSQL,
 		DimMap:         dimMap,
 		MtxMap:         mtxMap,
+		LabelMap:       labelMap,
 		Status:         status,
 		UpdatedBy:      operator,
 	}
@@ -174,6 +184,9 @@ func (s *DatasourceService) Validate(ctx context.Context, req *model.ValidateReq
 		return err
 	}
 	if _, err := normalizeStringMap(req.MtxMap, "mtx_map"); err != nil {
+		return err
+	}
+	if _, err := normalizeStringMap(req.LabelMap, "label_map"); err != nil {
 		return err
 	}
 	return nil

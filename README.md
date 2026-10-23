@@ -9,6 +9,7 @@ datasource 配置的增删改查服务。一条配置包含五个字段：
 | `mid_sql` | mediumtext | 中间层 SQL，**纯文本存储，不做语法/语义校验** |
 | `dim_map` | json | 维度映射，`map[string]string` |
 | `mtx_map` | json | 指标映射，`map[string]string` |
+| `label_map` | json | 维度/指标的中文含义，`map[string]string`，**只影响展示**，不参与 SQL 生成 |
 
 技术栈：Go 1.26 + gin + GORM + MySQL 8.0 / React 18 + TypeScript + Vite + Ant Design 5 + Monaco / Docker Compose。
 
@@ -20,6 +21,12 @@ open http://localhost:8080
 ```
 
 MySQL 首次启动会自动执行 `deploy/mysql/init.sql` 建库建表，数据落在 named volume `mysql-data`。
+
+存量环境升级（已建过表、缺 `label_map` 列）执行：
+
+```bash
+mysql < deploy/mysql/migrate_add_label_map.sql
+```
 
 ## 起一套 ClickHouse 演示环境
 
@@ -124,6 +131,11 @@ LIMIT 1000
 
 **安全**：`dims` / `metrics` / `order_by` / 过滤字段全部走白名单枚举校验，前端没有任何通道塞进任意 SQL；
 唯一的自由输入是过滤值，通过 ClickHouse 命名参数绑定，不参与字符串拼接。
+
+**中文含义（label_map）**：`label_map` 的 key 对应 `dim_map` / `mtx_map` 的键，value 是中文名。
+查询页的勾选控件会显示「消耗（cost）」这种形式，结果表头直接显示中文，
+原始字段名收进 Tooltip（鼠标悬停可见）——既照顾业务用户，又不丢字段名这个对接信息。
+没有配中文名的字段自动退回显示 key，不会显示空表头。
 
 **精度**：ClickHouse 的 `Decimal` 落到 `float64` 会丢精度（金额场景致命），所以这类值一律以字符串返回。
 

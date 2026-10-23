@@ -7,6 +7,7 @@ export interface DatasourceConfig {
   mid_sql: string;
   dim_map: StringMap;
   mtx_map: StringMap;
+  label_map: StringMap;
   status: number;
   version: number;
   created_by: string;
@@ -28,6 +29,7 @@ export interface CreatePayload {
   mid_sql: string;
   dim_map: StringMap;
   mtx_map: StringMap;
+  label_map: StringMap;
   status?: number;
 }
 
@@ -71,6 +73,7 @@ export interface UpdatePayload {
   mid_sql: string;
   dim_map: StringMap;
   mtx_map: StringMap;
+  label_map: StringMap;
   status?: number;
   version: number;
 }

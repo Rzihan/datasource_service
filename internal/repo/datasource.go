@@ -96,7 +96,7 @@ func (r *DatasourceRepo) Update(ctx context.Context, m *DatasourceConfigModel, e
 	m.Version = expectedVersion + 1
 	res := r.db.WithContext(ctx).Model(&DatasourceConfigModel{}).
 		Where("datasource_key = ? AND deleted_at = 0 AND version = ?", m.DatasourceKey, expectedVersion).
-		Select("datasource_name", "mid_sql", "dim_map", "mtx_map", "status", "version", "updated_by", "updated_at").
+		Select("datasource_name", "mid_sql", "dim_map", "mtx_map", "label_map", "status", "version", "updated_by", "updated_at").
 		Updates(m)
 	if res.Error != nil {
 		if isDuplicate(res.Error) {
