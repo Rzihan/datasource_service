@@ -1,0 +1,51 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: datasource-mysql
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass_please_change
+      MYSQL_DATABASE: datasource_service
+      MYSQL_USER: datasource
+      MYSQL_PASSWORD: datasource_pass
+    ports:
+      - '3306:3306'
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./deploy/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      # app 依赖这个探针，避免 MySQL 还没就绪时服务就启动，省掉一堆连接重试
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot', '-proot_pass_please_change']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: datasource-app
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      HTTP_PORT: 8080
+      GIN_MODE: release
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: datasource
+      DB_PASSWORD: datasource_pass
+      DB_NAME: datasource_service
+      DB_MAX_OPEN: 50
+      DB_MAX_IDLE: 10
+      # mid_sql 软上限（字节），防误操作把存储撑爆
+      MAX_SQL_BYTES: 1048576
+      # 表结构由 init.sql 建好；本地想让 GORM 自动对齐表结构时改成 true
+      DB_AUTO_MIGRATE: 'false'
+    ports:
+      - '8080:8080'
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

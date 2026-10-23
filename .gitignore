@@ -1,0 +1,16 @@
+bin/
+
+# IDE 与本地工具数据
+.idea/
+.workbuddy/
+
+# 前端依赖与构建产物
+web/node_modules/
+web/dist/
+
+# 前端构建产物由 go:embed 使用，目录本身需要存在，因此保留占位 index.html
+internal/web/dist/*
+!internal/web/dist/index.html
+
+.env
+.DS_Store

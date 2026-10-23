@@ -1,0 +1,11 @@
+.git
+.gitignore
+.workbuddy
+bin
+*.md
+web/node_modules
+web/dist
+deploy
+docker-compose.yml
+Dockerfile
+.dockerignore
