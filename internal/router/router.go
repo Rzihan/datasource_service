@@ -11,6 +11,7 @@ import (
 	"datasource_service/internal/config"
 	"datasource_service/internal/handler"
 	"datasource_service/internal/middleware"
+	"datasource_service/internal/query"
 	"datasource_service/internal/web"
 
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,7 @@ type Deps struct {
 	Config *config.Config
 	DB     *gorm.DB
 	DS     *handler.DatasourceHandler
+	QH     *query.Handler
 }
 
 // New 构建 gin 引擎：API 路由 + 前端静态资源 + SPA fallback。
@@ -46,6 +48,11 @@ func New(d Deps) *gin.Engine {
 		v1.GET("/datasources/:key", d.DS.Get)
 		v1.PUT("/datasources/:key", d.DS.Update)
 		v1.DELETE("/datasources/:key", d.DS.Delete)
+
+		// 查询只暴露一个执行接口：前端传「查询意图」，SQL 由后端生成，用户不感知。
+		v1.POST("/query/execute", d.QH.Execute)
+		// 维度候选值，供前端下拉枚举
+		v1.GET("/datasources/:key/dim-values", d.QH.DimValues)
 	}
 
 	mountSPA(r, d.Config.StaticDir)

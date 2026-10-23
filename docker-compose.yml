@@ -43,6 +43,17 @@ services:
       MAX_SQL_BYTES: 1048576
       # 表结构由 init.sql 建好；本地想让 GORM 自动对齐表结构时改成 true
       DB_AUTO_MIGRATE: 'false'
+      # ---- ClickHouse：改成你实际的只读账号地址 ----
+      CH_HOST: clickhouse
+      CH_PORT: 9000
+      CH_USER: default
+      CH_PASSWORD: ''
+      CH_DB: default
+      QUERY_TIMEOUT_SECONDS: 30
+      QUERY_MAX_ROWS: 10000
+      QUERY_DEFAULT_LIMIT: 1000
+      QUERY_MAX_CONCURRENCY: 8
+      QUERY_DIM_VALUE_LIMIT: 1000
     ports:
       - '8080:8080'
     restart: unless-stopped

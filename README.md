@@ -52,6 +52,57 @@ web                  React 前端
 deploy/mysql         init.sql 建表脚本
 ```
 
+## 两个页面
+
+| 路由 | 功能 |
+| --- | --- |
+| `/datasources` | 配置管理：datasource 的增删改查 |
+| `/query` | 可视化查询：选数据源 → 选维度/指标 → 加过滤 → 查数 → 看表格和图表 |
+
+## 可视化查询怎么工作
+
+用户不接触 SQL，只描述「想看什么」：
+
+```jsonc
+// POST /api/v1/query/execute
+{
+  "datasource_key": "order_daily",
+  "dims":    ["date", "city"],        // 必须是该数据源 dim_map 里的 key
+  "metrics": ["cost", "click"],       // 必须是该数据源 mtx_map 里的 key
+  "filters": [{"field": "city", "op": "=", "value": "北京"}],
+  "order_by":[{"field": "cost", "desc": true}],
+  "limit":   1000                      // 服务端 clamp 到 QUERY_MAX_ROWS
+}
+```
+
+后端据此生成 SQL 并在 ClickHouse 上执行：
+
+```sql
+SELECT stat_date AS `date`, city_code AS `city`, sum(stat_cost) AS `cost`
+FROM ( <mid_sql> ) AS __mid
+WHERE city_code = {p0:String}
+GROUP BY stat_date, city_code
+ORDER BY `cost` DESC
+LIMIT 1000
+```
+
+约定：`mid_sql` 的输出是**可以被再次聚合的中间结果**，外层按用户选的维度重新聚合，
+指标口径统一、不会重复计算。所以 `mid_sql` 里不要写 `ORDER BY` / `LIMIT`（先截断再聚合，结果会错）。
+
+**查询的三道防线**（都是硬限制，不是优化项）：
+
+1. 行数：默认 1000，服务端硬顶 `QUERY_MAX_ROWS`（默认 10000），超出截断并回传 `truncated: true`
+2. 超时：`context` 超时 + ClickHouse `max_execution_time` 双管齐下（默认 30s）——只靠 context 取消，CH 端的查询不一定立刻终止
+3. 并发：全局闸门 `QUERY_MAX_CONCURRENCY`（默认 8），防止几个人各点几个大查询把 CH 拖垮
+
+**安全**：`dims` / `metrics` / `order_by` / 过滤字段全部走白名单枚举校验，前端没有任何通道塞进任意 SQL；
+唯一的自由输入是过滤值，通过 ClickHouse 命名参数绑定，不参与字符串拼接。
+
+**精度**：ClickHouse 的 `Decimal` 落到 `float64` 会丢精度（金额场景致命），所以这类值一律以字符串返回。
+
+**排错**：用户看不到 SQL，出错时前端展示引擎原始错误 + `request_id`，完整 SQL 只进服务日志——
+拿 request_id 去日志里捞即可。
+
 ## API
 
 基址 `/api/v1`，统一响应 `{ code, message, data, request_id }`，`code = 0` 为成功。
@@ -64,6 +115,8 @@ deploy/mysql         init.sql 建表脚本
 | PUT | `/datasources/:key` | 全量更新，带 `version` 乐观锁，冲突返回 409 |
 | DELETE | `/datasources/:key` | 软删除 |
 | POST | `/datasources/validate` | 只校验 dim_map / mtx_map，不落库 |
+| POST | `/query/execute` | 按查询意图执行查询，返回列、行、耗时、是否截断 |
+| GET | `/datasources/:key/dim-values` | 某维度的候选值（`?field=city`），上限 `QUERY_DIM_VALUE_LIMIT` |
 | GET | `/healthz` `/readyz` | 存活 / 就绪探针（readyz 会 ping 数据库） |
 
 示例：
@@ -91,6 +144,13 @@ curl -X POST localhost:8080/api/v1/datasources \
 | `DB_MAX_OPEN` / `DB_MAX_IDLE` | 50 / 10 | 连接池上限 |
 | `DB_MAX_LIFETIME_SECONDS` | 1800 | 连接最大复用时长 |
 | `MAX_SQL_BYTES` | 1048576 | mid_sql 字节软上限，防存储被撑爆 |
+| `CH_HOST` / `CH_PORT` | clickhouse / 9000 | ClickHouse 地址（native 协议），**必须是只读账号** |
+| `CH_USER` / `CH_PASSWORD` / `CH_DB` | default / 空 / default | ClickHouse 凭据 |
+| `QUERY_TIMEOUT_SECONDS` | 30 | 查询超时（同时作用于 context 与 CH 的 max_execution_time） |
+| `QUERY_MAX_ROWS` | 10000 | 单次结果硬顶 |
+| `QUERY_DEFAULT_LIMIT` | 1000 | 未指定 limit 时的默认行数 |
+| `QUERY_MAX_CONCURRENCY` | 8 | 同时执行的查询数上限 |
+| `QUERY_DIM_VALUE_LIMIT` | 1000 | 维度候选值上限 |
 | `STATIC_DIR` | 空 | 非空则从磁盘读前端资源（开发用），否则用 embed |
 | `DB_AUTO_MIGRATE` | false | 设为 true 时启动自动对齐表结构 |
 | `SHUTDOWN_WAIT_SECONDS` | 15 | 优雅退出最长等待时间 |

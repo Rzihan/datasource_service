@@ -1,5 +1,12 @@
 import axios from 'axios';
-import type { CreatePayload, DatasourceConfig, ListResult, UpdatePayload } from './types';
+import type {
+  CreatePayload,
+  DatasourceConfig,
+  ListResult,
+  QueryRequest,
+  QueryResult,
+  UpdatePayload,
+} from './types';
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 20000 });
 
@@ -39,4 +46,12 @@ export function updateDatasource(key: string, payload: UpdatePayload): Promise<D
 
 export function deleteDatasource(key: string): Promise<unknown> {
   return unwrap(http.delete(`/datasources/${encodeURIComponent(key)}`));
+}
+
+export function executeQuery(payload: QueryRequest): Promise<QueryResult> {
+  return unwrap(http.post('/query/execute', payload));
+}
+
+export function fetchDimValues(key: string, field: string): Promise<{ field: string; values: string[] }> {
+  return unwrap(http.get(`/datasources/${encodeURIComponent(key)}/dim-values`, { params: { field } }));
 }

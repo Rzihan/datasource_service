@@ -12,6 +12,7 @@ import (
 
 	"datasource_service/internal/config"
 	"datasource_service/internal/handler"
+	"datasource_service/internal/query"
 	"datasource_service/internal/repo"
 	"datasource_service/internal/router"
 	"datasource_service/internal/service"
@@ -43,10 +44,27 @@ func main() {
 		}
 	}
 
+	// ClickHouse 引擎：连不上不致命，配置管理仍可用，只是查数功能不可用。
+	chEngine, err := query.NewClickHouse(cfg.CH, cfg.Query.MaxResultRows)
+	if err != nil {
+		slog.Error("init clickhouse failed", "error", err)
+		os.Exit(1)
+	}
+	defer chEngine.Close()
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pingCancel()
+	if err := chEngine.Ping(pingCtx); err != nil {
+		slog.Warn("clickhouse is not reachable, query feature will fail until it recovers", "error", err)
+	}
+
 	dsHandler := handler.NewDatasourceHandler(
 		service.NewDatasourceService(repo.NewDatasourceRepo(db), cfg.MaxSQLBytes),
 	)
-	engine := router.New(router.Deps{Config: cfg, DB: db, DS: dsHandler})
+	queryHandler := query.NewHandler(query.NewService(
+		repo.NewDatasourceRepo(db), chEngine, cfg.Query,
+		time.Duration(cfg.CH.QueryTimeoutSeconds)*time.Second,
+	))
+	engine := router.New(router.Deps{Config: cfg, DB: db, DS: dsHandler, QH: queryHandler})
 
 	srv := &http.Server{
 		Addr:              ":" + itoa(cfg.HTTPPort),
