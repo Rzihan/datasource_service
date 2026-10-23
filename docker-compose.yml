@@ -1,6 +1,7 @@
 services:
   mysql:
-    image: mysql:8.0
+    # 镜像名可覆盖：访问不到 docker.io 时，在 .env 里配加速源地址
+    image: ${MYSQL_IMAGE:-mysql:8.0}
     container_name: datasource-mysql
     command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
     environment:
@@ -20,6 +21,34 @@ services:
       timeout: 5s
       retries: 30
       start_period: 30s
+
+  clickhouse:
+    # 查询执行引擎。8123 是 HTTP 端口，浏览器打开 http://localhost:8123/play
+    # 就是 ClickHouse 自带的 Web 控制台，可以直接写 SQL 看数据。
+    image: ${CH_IMAGE:-clickhouse/clickhouse-server:24.8}
+    container_name: datasource-clickhouse
+    environment:
+      CLICKHOUSE_DB: demo
+      CLICKHOUSE_USER: datasource
+      CLICKHOUSE_PASSWORD: ch_pass
+      # 允许 init.sql 创建只读账号
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    ports:
+      - '8123:8123'
+      - '9000:9000'
+    volumes:
+      - ch-data:/var/lib/clickhouse
+      - ./deploy/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'clickhouse-client --query "SELECT 1" >/dev/null 2>&1 || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
 
   app:
     build:
@@ -43,12 +72,12 @@ services:
       MAX_SQL_BYTES: 1048576
       # 表结构由 init.sql 建好；本地想让 GORM 自动对齐表结构时改成 true
       DB_AUTO_MIGRATE: 'false'
-      # ---- ClickHouse：改成你实际的只读账号地址 ----
+      # ---- ClickHouse：用 init.sql 里建的只读账号 reader ----
       CH_HOST: clickhouse
       CH_PORT: 9000
-      CH_USER: default
-      CH_PASSWORD: ''
-      CH_DB: default
+      CH_USER: reader
+      CH_PASSWORD: reader_pass
+      CH_DB: demo
       QUERY_TIMEOUT_SECONDS: 30
       QUERY_MAX_ROWS: 10000
       QUERY_DEFAULT_LIMIT: 1000
@@ -60,3 +89,4 @@ services:
 
 volumes:
   mysql-data:
+  ch-data:

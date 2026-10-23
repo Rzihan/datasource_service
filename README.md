@@ -21,6 +21,33 @@ open http://localhost:8080
 
 MySQL 首次启动会自动执行 `deploy/mysql/init.sql` 建库建表，数据落在 named volume `mysql-data`。
 
+## 起一套 ClickHouse 演示环境
+
+```bash
+docker compose up -d clickhouse
+```
+
+容器首次启动会执行 `deploy/clickhouse/init.sql`：
+
+- 建库 `demo`、建表 `demo.t_order_dtl`，灌入 **5000 行**演示数据
+  （含 `Date`、`Nullable(String)`、`Decimal(18,2)`、`UInt64` 等各种类型）
+- 建只读账号 **`reader` / `reader_pass`**，服务就用它连接
+
+### ClickHouse 的可视化界面
+
+| 方式 | 地址 / 命令 | 说明 |
+| --- | --- | --- |
+| **自带 Web 控制台**（推荐先用这个） | http://localhost:8123/play | ClickHouse 内置，零额外组件。登录用 `reader` / `reader_pass`（只读）或 `datasource` / `ch_pass` |
+| **DBeaver**（功能最全） | `brew install --cask dbeaver-community` | 图形化客户端：浏览表结构、预览数据、建表改表、看执行计划 |
+| 本项目查询页 | http://localhost:8080/query | 面向业务用户的查数界面，不写 SQL |
+
+只想快速跑一条 SQL，也可以直接用 HTTP 接口：
+
+```bash
+curl 'http://localhost:8123/?user=reader&password=reader_pass' \
+  --data-urlencode 'query=SELECT city_code, sum(stat_cost) FROM demo.t_order_dtl GROUP BY city_code'
+```
+
 ## 本地开发
 
 前端用 Vite dev server（5173），API 请求代理到本机 8080：
@@ -145,6 +172,7 @@ curl -X POST localhost:8080/api/v1/datasources \
 | `DB_MAX_LIFETIME_SECONDS` | 1800 | 连接最大复用时长 |
 | `MAX_SQL_BYTES` | 1048576 | mid_sql 字节软上限，防存储被撑爆 |
 | `CH_HOST` / `CH_PORT` | clickhouse / 9000 | ClickHouse 地址（native 协议），**必须是只读账号** |
+| `MYSQL_IMAGE` / `CH_IMAGE` | mysql:8.0 / clickhouse-server:24.8 | 镜像名覆盖，写在 `.env` 里（用于配置镜像加速源） |
 | `CH_USER` / `CH_PASSWORD` / `CH_DB` | default / 空 / default | ClickHouse 凭据 |
 | `QUERY_TIMEOUT_SECONDS` | 30 | 查询超时（同时作用于 context 与 CH 的 max_execution_time） |
 | `QUERY_MAX_ROWS` | 10000 | 单次结果硬顶 |
@@ -178,6 +206,19 @@ curl -X POST localhost:8080/api/v1/datasources \
 
 6. **单容器交付**。前端产物 `go:embed` 进二进制，部署只有一个镜像、一个端口，
    不需要 nginx 也不需要对象存储。
+
+## 类型映射（已在真实 ClickHouse 上验证）
+
+| ClickHouse 类型 | 返回给前端 | 说明 |
+| --- | --- | --- |
+| `String` / `UInt64` | 字符串 / 数字 | 原样 |
+| `Decimal` | **字符串** | 直接落 `float64` 会丢精度，金额场景致命 |
+| `Date` | `2026-10-05` | 不带时分秒，避免变成 `T00:00:00Z` |
+| `DateTime` | RFC3339 字符串 | |
+| `Nullable(T)` 为 NULL | `null` | 前端渲染成灰色 NULL |
+
+驱动要点：`clickhouse-go` **不支持扫描到 `*interface{}`**，必须按 `ColumnTypes()[i].ScanType()`
+构造目标；`Nullable` 列要给**二级指针**，否则 NULL 会被读成零值，和空字符串分不开。
 
 ## 已知边界
 
