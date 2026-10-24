@@ -54,6 +54,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # 基础镜像默认取官方地址；本机 docker.io 拉不到时，在 .env 里改成加速源
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-docker.1ms.run/library/node:22-alpine}
+        GO_IMAGE: ${GO_IMAGE:-docker.1ms.run/library/golang:1.26-alpine}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-docker.1ms.run/library/alpine:3.21}
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     container_name: datasource-app
     depends_on:
       mysql:

@@ -22,6 +22,37 @@ open http://localhost:8080
 
 MySQL 首次启动会自动执行 `deploy/mysql/init.sql` 建库建表，数据落在 named volume `mysql-data`。
 
+### 拉不到镜像时怎么办
+
+`docker.io` 在部分网络下直接返回 **Bad Gateway**，表现为 `FROM xxx` 就解析失败：
+
+```
+failed to solve: golang:1.26-alpine: failed to resolve source metadata for
+docker.io/library/golang:1.26-alpine: ... Bad Gateway
+```
+
+Dockerfile 的三个基础镜像与两个包管理源都做成了 `ARG`，**默认值已经指向加速源**
+（`docker.1ms.run` + `goproxy.cn` + `npmmirror`），一般直接构建即可。要换源时改两处：
+
+```bash
+# 1) Dockerfile 顶部的 ARG 默认值
+# 2) docker-compose.yml 的 build.args（它的 :- 兜底会覆盖 Dockerfile 的值，两处必须一致）
+```
+
+也可以只在 `.env` 里覆盖，不必改文件（`.env` 已在 `.gitignore`）：
+
+```bash
+NODE_IMAGE=docker.m.daocloud.io/library/node:22-alpine
+GO_IMAGE=docker.m.daocloud.io/library/golang:1.26-alpine
+RUNTIME_IMAGE=docker.m.daocloud.io/library/alpine:3.21
+```
+
+> **踩过的坑**：只在 Dockerfile 里改默认值没用。`build.args` 里 `${NODE_IMAGE:-node:22-alpine}`
+> 的兜底值会传进去把默认覆盖掉，于是仍然去解析 docker.io。**两处默认值必须一起改。**
+
+宿主端口如果被占（本机装了 MySQL 会占 3306），改 `docker-compose.yml` 的 `ports`，
+或先停掉本机服务：`brew services stop mysql`。
+
 存量环境升级（已建过表、缺 `label_map` 列）执行：
 
 ```bash
