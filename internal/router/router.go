@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 
 	"datasource_service/internal/config"
@@ -61,6 +62,11 @@ func New(d Deps) *gin.Engine {
 	return r
 }
 
+// bundlePattern 从 index.html 里抠出入口 JS 文件名。
+// 启动时打印它，是为了让「我改了前端但页面没变」这类问题一眼可查：
+// 浏览器 Network 里看到的 bundle 名必须与日志一致。
+var bundlePattern = regexp.MustCompile(`/assets/(index-[A-Za-z0-9_.-]+\.js)`)
+
 // mountSPA 挂载前端静态资源。
 //   - StaticDir 非空（开发态）：直接从磁盘读取，改前端无需重编译 Go。
 //   - 否则使用 go:embed 的 dist。
@@ -106,10 +112,21 @@ func mountSPA(r *gin.Engine, staticDir string) string {
 			// 构建产物文件名带内容哈希，可以放心长缓存
 			c.Header("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
-			c.Header("Cache-Control", "no-cache")
+			// index.html 必须每次回源。用 no-store 而不是 no-cache：
+			// 只给 no-cache 时，部分内嵌预览/会话恢复场景仍会复用旧 HTML，
+			// 于是继续加载已被删掉的旧 JS，表现为「改了前端但页面没变」。
+			c.Header("Cache-Control", "no-store, must-revalidate")
+			c.Header("Pragma", "no-cache")
+			c.Header("Expires", "0")
 		}
 		c.Data(http.StatusOK, ct, data)
 		return true
+	}
+
+	if data, err := fs.ReadFile(fsys, "index.html"); err == nil {
+		if m := bundlePattern.FindSubmatch(data); m != nil {
+			slog.Info("frontend bundle resolved", "bundle", string(m[1]), "source", source)
+		}
 	}
 
 	index := func(c *gin.Context) {
