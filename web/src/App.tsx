@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { App as AntApp, Input, Layout, Menu, Space, Typography } from 'antd';
+import { App as AntApp, Input, Layout, Menu, Select, Space, Typography } from 'antd';
 import { AppstoreOutlined, BarChartOutlined } from '@ant-design/icons';
 import DatasourceList from './pages/DatasourceList';
 import QueryPage from './pages/QueryPage';
+import { readTenants, writeTenants } from './tenants';
 
 const OPERATOR_KEY = 'ds_operator';
 
@@ -17,6 +18,7 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const [operator, setOperator] = useState(() => localStorage.getItem(OPERATOR_KEY) || 'system');
+  const [tenants, setTenants] = useState<string[]>(readTenants);
 
   // 系统不接鉴权，操作人由使用者自报并存在本地，随请求头 X-User 带给后端审计。
   const onOperatorChange = (value: string) => {
@@ -24,6 +26,12 @@ export default function App() {
     setOperator(v);
     localStorage.setItem(OPERATOR_KEY, v);
     message.success(`操作人已切换为 ${v}`);
+  };
+
+  // 登录态租户可以多选。数据源的 acl.tenants 非空时，与这里取交集才可见。
+  const onTenantsChange = (value: string[]) => {
+    setTenants(value);
+    writeTenants(value);
   };
 
   return (
@@ -41,10 +49,21 @@ export default function App() {
           Datasource 服务
         </Typography.Title>
         <Space size="small">
+          <Typography.Text type="secondary">登录态租户</Typography.Text>
+          <Select
+            mode="tags"
+            size="small"
+            style={{ minWidth: 220 }}
+            value={tenants}
+            onChange={onTenantsChange}
+            placeholder="留空=不指定租户"
+            tokenSeparators={[',']}
+            maxTagCount={3}
+          />
           <Typography.Text type="secondary">操作人</Typography.Text>
           <Input
             size="small"
-            style={{ width: 160 }}
+            style={{ width: 130 }}
             value={operator}
             placeholder="用于审计"
             onChange={(e) => setOperator(e.target.value)}

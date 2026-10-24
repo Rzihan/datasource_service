@@ -3,6 +3,7 @@ import type {
   CreatePayload,
   DatasourceConfig,
   ListResult,
+  QueryDatasource,
   QueryRequest,
   QueryResult,
   UpdatePayload,
@@ -10,9 +11,11 @@ import type {
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 20000 });
 
-// 系统不接鉴权，操作人来自本地填写的用户名，随请求头带给后端记入 created_by / updated_by。
+// 系统不接鉴权：操作人来自本地填写的用户名，租户来自本地选择的租户列表，
+// 两者都随请求头带给后端，分别用于审计与数据源级可见性判断。
 http.interceptors.request.use((config) => {
   config.headers['X-User'] = localStorage.getItem('ds_operator') || 'system';
+  config.headers['X-Tenants'] = localStorage.getItem('ds_tenants') || '';
   return config;
 });
 
@@ -46,6 +49,11 @@ export function updateDatasource(key: string, payload: UpdatePayload): Promise<D
 
 export function deleteDatasource(key: string): Promise<unknown> {
   return unwrap(http.delete(`/datasources/${encodeURIComponent(key)}`));
+}
+
+// 查询页的数据源列表：已按请求头里的租户过滤，且不含 mid_sql
+export function fetchQueryDatasources(): Promise<{ items: QueryDatasource[] }> {
+  return unwrap(http.get('/query/datasources'));
 }
 
 export function executeQuery(payload: QueryRequest): Promise<QueryResult> {

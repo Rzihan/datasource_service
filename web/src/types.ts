@@ -1,5 +1,21 @@
 export type StringMap = Record<string, string>;
 
+// 数据源级访问控制。用对象而不是数组，后续可以往里加 users / roles 等维度。
+// tenants 为空（或缺失）表示不限制，所有租户可见。
+export interface ACL {
+  tenants?: string[];
+}
+
+// 查询页看到的数据源：刻意不含 mid_sql，用户不感知 SQL。
+export interface QueryDatasource {
+  datasource_key: string;
+  datasource_name: string;
+  dim_map: StringMap;
+  mtx_map: StringMap;
+  label_map: StringMap;
+  acl: ACL;
+}
+
 export interface DatasourceConfig {
   id: number;
   datasource_key: string;
@@ -8,6 +24,7 @@ export interface DatasourceConfig {
   dim_map: StringMap;
   mtx_map: StringMap;
   label_map: StringMap;
+  acl: ACL;
   status: number;
   version: number;
   created_by: string;
@@ -30,6 +47,7 @@ export interface CreatePayload {
   dim_map: StringMap;
   mtx_map: StringMap;
   label_map: StringMap;
+  acl: ACL;
   status?: number;
 }
 
@@ -78,6 +96,7 @@ export interface UpdatePayload {
   dim_map: StringMap;
   mtx_map: StringMap;
   label_map: StringMap;
+  acl: ACL;
   status?: number;
   version: number;
 }

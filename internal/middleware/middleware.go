@@ -46,6 +46,58 @@ func Operator(header string) gin.HandlerFunc {
 	}
 }
 
+// TenantCtxKey 是登录态租户在 gin context 里的键。
+const TenantCtxKey = "tenants"
+
+// Tenants 解析当前登录态所属的租户，来自 X-Tenants 请求头（逗号分隔，支持多租户）。
+//
+// 与 Operator 同一套思路：系统不接鉴权，租户由调用方自报，
+// 只用于判断数据源对当前登录态是否可见，不作为安全边界。
+func Tenants(header string) gin.HandlerFunc {
+	if header == "" {
+		header = "X-Tenants"
+	}
+	return func(c *gin.Context) {
+		c.Set(TenantCtxKey, ParseTenants(c.GetHeader(header)))
+		c.Next()
+	}
+}
+
+// ParseTenants 解析逗号分隔的租户串：去空白、丢弃空串、去重，保持原有顺序。
+func ParseTenants(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		t := strings.TrimSpace(p)
+		if t == "" {
+			continue
+		}
+		if len(t) > 64 {
+			t = t[:64]
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
+}
+
+// CurrentTenants 从 gin context 取登录态租户。中间件没挂时返回空切片（等价于无租户）。
+func CurrentTenants(c *gin.Context) []string {
+	if v, ok := c.Get(TenantCtxKey); ok {
+		if list, ok := v.([]string); ok {
+			return list
+		}
+	}
+	return []string{}
+}
+
 // Logger 结构化访问日志。
 func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -59,6 +111,7 @@ func Logger() gin.HandlerFunc {
 			"latency_ms", time.Since(start).Milliseconds(),
 			"client_ip", c.ClientIP(),
 			"operator", c.GetString("operator"),
+			"tenants", strings.Join(CurrentTenants(c), ","),
 			"errors", c.Errors.String(),
 		)
 	}
@@ -71,7 +124,7 @@ func CORS() gin.HandlerFunc {
 		if origin != "" {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Content-Type,X-User,X-Request-Id")
+			c.Header("Access-Control-Allow-Headers", "Content-Type,X-User,X-Tenants,X-Request-Id")
 			c.Header("Access-Control-Max-Age", "86400")
 		}
 		if c.Request.Method == http.MethodOptions {

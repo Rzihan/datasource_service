@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"datasource_service/internal/handler"
+	"datasource_service/internal/middleware"
 	"datasource_service/internal/repo"
 
 	"github.com/gin-gonic/gin"
@@ -27,12 +28,22 @@ func (h *Handler) Execute(c *gin.Context) {
 		handler.BadRequest(c, "请求体不是合法 JSON")
 		return
 	}
-	res, err := h.svc.Execute(c.Request.Context(), &req, operatorFromContext(c))
+	res, err := h.svc.Execute(c.Request.Context(), &req, operatorFromContext(c), tenantsFromContext(c))
 	if err != nil {
 		writeQueryError(c, err)
 		return
 	}
 	handler.OK(c, res)
+}
+
+// Datasources 查询页可选的数据源：已按当前登录态的租户白名单过滤。
+func (h *Handler) Datasources(c *gin.Context) {
+	items, err := h.svc.VisibleDatasources(c.Request.Context(), tenantsFromContext(c))
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handler.OK(c, gin.H{"items": items})
 }
 
 // DimValues 返回维度候选值，用于前端下拉枚举。
@@ -42,7 +53,7 @@ func (h *Handler) DimValues(c *gin.Context) {
 		handler.BadRequest(c, "缺少 field 参数")
 		return
 	}
-	values, err := h.svc.DimValues(c.Request.Context(), c.Param("key"), field)
+	values, err := h.svc.DimValues(c.Request.Context(), c.Param("key"), field, tenantsFromContext(c))
 	if err != nil {
 		writeQueryError(c, err)
 		return
@@ -59,9 +70,15 @@ func writeQueryError(c *gin.Context, err error) {
 		handler.Fail(c, http.StatusNotFound, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrInvalidQuery):
 		handler.BadRequest(c, err.Error())
+	case errors.Is(err, ErrForbidden):
+		handler.Fail(c, http.StatusForbidden, http.StatusForbidden, err.Error())
 	default:
 		handler.Fail(c, http.StatusBadRequest, http.StatusBadRequest, err.Error())
 	}
+}
+
+func tenantsFromContext(c *gin.Context) []string {
+	return middleware.CurrentTenants(c)
 }
 
 func operatorFromContext(c *gin.Context) string {

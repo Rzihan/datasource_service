@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { App, Button, Drawer, Form, Input, Space, Switch, Typography } from 'antd';
+import { App, Button, Drawer, Form, Input, Select, Space, Switch, Typography } from 'antd';
 import SqlEditor from './SqlEditor';
 import StringMapEditor from './StringMapEditor';
 import { createDatasource, updateDatasource } from '../api';
@@ -26,6 +26,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   const [dimMap, setDimMap] = useState<StringMap>({});
   const [mtxMap, setMtxMap] = useState<StringMap>({});
   const [labelMap, setLabelMap] = useState<StringMap>({});
+  const [tenants, setTenants] = useState<string[]>([]);
   const [enabled, setEnabled] = useState(true);
 
   useEffect(() => {
@@ -37,6 +38,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setDimMap(record.dim_map ?? {});
       setMtxMap(record.mtx_map ?? {});
       setLabelMap(record.label_map ?? {});
+      setTenants(record.acl?.tenants ?? []);
       setEnabled(record.status === 1);
     } else {
       setKey('');
@@ -45,6 +47,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setDimMap({});
       setMtxMap({});
       setLabelMap({});
+      setTenants([]);
       setEnabled(true);
     }
   }, [open, record]);
@@ -80,6 +83,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           dim_map: dimMap,
           mtx_map: mtxMap,
           label_map: labelMap,
+          acl: { tenants },
           status: enabled ? 1 : 0,
           version: record.version,
         });
@@ -92,6 +96,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           dim_map: dimMap,
           mtx_map: mtxMap,
           label_map: labelMap,
+          acl: { tenants },
           status: enabled ? 1 : 0,
         });
         message.success('已创建');
@@ -202,6 +207,20 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
             onChange={setLabelMap}
             placeholderKey="维度或指标名，例如 cost"
             placeholderValue="中文含义，例如 消耗"
+          />
+        </Form.Item>
+
+        <Form.Item
+          label="acl.tenants"
+          extra="租户白名单，用于查询页的数据源级权限管控。留空表示不限制，所有租户可见；填了则登录态租户与白名单有交集才可见"
+        >
+          <Select
+            mode="tags"
+            style={{ width: '100%' }}
+            value={tenants}
+            onChange={setTenants}
+            placeholder="留空=不限制，可直接输入租户名后回车"
+            tokenSeparators={[',']}
           />
         </Form.Item>
       </Form>

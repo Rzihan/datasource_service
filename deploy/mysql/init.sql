@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS `datasource_config` (
   `dim_map`         JSON          NOT NULL COMMENT '维度映射 map[string]string',
   `mtx_map`         JSON          NOT NULL COMMENT '指标映射 map[string]string',
   `label_map`       JSON          NOT NULL DEFAULT (JSON_OBJECT()) COMMENT '维度/指标的中文含义，key 对应 dim_map/mtx_map 的键，仅影响展示',
+  `acl`             JSON          NOT NULL DEFAULT (JSON_OBJECT()) COMMENT '访问控制，如 {"tenants":["t1"]}；tenants 缺省或为 [] 表示不限制',
   `status`          TINYINT       NOT NULL DEFAULT 1 COMMENT '1 启用 0 停用',
   `version`         INT           NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
   `created_by`      VARCHAR(64)   NOT NULL DEFAULT '' COMMENT '创建人',
@@ -31,3 +32,8 @@ CREATE TABLE IF NOT EXISTS `datasource_config` (
 -- MySQL 的 JSON 类型会在写入时校验语法并转成二进制存储，
 -- 代价几乎为零，却能把非法 JSON 挡在数据库之外。
 -- 业务结构（map[string]string）由 Go 侧类型系统保证：非字符串值在反序列化时会被拒绝。
+--
+-- acl 同样用 JSON，且刻意用对象而不是数组：后续要加 users / roles / 读写分离等维度时
+-- 往对象里加字段即可，不必改表结构、不必迁存量数据。
+-- 注意默认值用 JSON_OBJECT()（即 {}）而不是 {"tenants":null}：
+-- null 会被 JSON 函数当成「有一个元素」，把「不限制」误判成「受限」。

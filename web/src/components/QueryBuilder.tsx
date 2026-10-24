@@ -1,12 +1,12 @@
 import { App, Alert, Button, InputNumber, Select, Space, Typography } from 'antd';
 import { ClearOutlined, SearchOutlined } from '@ant-design/icons';
-import type { DatasourceConfig, FilterNode, OrderBy } from '../types';
+import type { FilterNode, OrderBy, QueryDatasource } from '../types';
 import FilterTreeEditor from './FilterTreeEditor';
 import { countLeaves, emptyRoot, removeFields } from '../utils/filterTree';
 
 interface Props {
-  datasources: DatasourceConfig[];
-  selected: DatasourceConfig | null;
+  datasources: QueryDatasource[];
+  selected: QueryDatasource | null;
   onSelectDatasource: (key: string) => void;
   dims: string[];
   metrics: string[];

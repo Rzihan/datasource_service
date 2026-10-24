@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -30,11 +31,47 @@ func NewService(r *repo.DatasourceRepo, e Engine, cfg config.QueryConfig, timeou
 	}
 }
 
+// ErrForbidden 表示当前登录态的租户看不到该数据源。handler 映射为 403。
+var ErrForbidden = errors.New("forbidden")
+
+// VisibleDatasources 返回当前登录态可见的数据源。
+//
+// 可见性规则：数据源的租户白名单为空 = 不限制（所有租户可见）；
+// 非空 = 登录态租户与白名单有交集才可见。
+func (s *Service) VisibleDatasources(ctx context.Context, tenants []string) ([]QueryDatasource, error) {
+	items, err := s.repo.ListAvailable(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]QueryDatasource, 0, len(items))
+	for _, it := range items {
+		if !it.ACL.Allows(tenants) {
+			continue
+		}
+		out = append(out, QueryDatasource{
+			DatasourceKey:  it.DatasourceKey,
+			DatasourceName: it.DatasourceName,
+			DimMap:         it.DimMap,
+			MtxMap:         it.MtxMap,
+			LabelMap:       it.LabelMap,
+			ACL:            it.ACL,
+		})
+	}
+	return out, nil
+}
+
 // Execute 执行一次查询。
-func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator string) (*ExecuteResult, error) {
+func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator string, tenants []string) (*ExecuteResult, error) {
 	ds, err := s.repo.GetByKey(ctx, req.DatasourceKey)
 	if err != nil {
 		return nil, err
+	}
+	if !ds.ACL.Allows(tenants) {
+		slog.Warn("query denied by tenant acl",
+			"operator", operator, "datasource_key", ds.DatasourceKey,
+			"tenants", tenants, "acl_tenants", ds.ACL.Tenants,
+		)
+		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问数据源 %q", ErrForbidden, ds.DatasourceKey)
 	}
 
 	sqlText, params, err := Build(Spec{
@@ -89,10 +126,13 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 }
 
 // DimValues 返回某个维度的候选值，供前端下拉枚举。
-func (s *Service) DimValues(ctx context.Context, datasourceKey, field string) ([]string, error) {
+func (s *Service) DimValues(ctx context.Context, datasourceKey, field string, tenants []string) ([]string, error) {
 	ds, err := s.repo.GetByKey(ctx, datasourceKey)
 	if err != nil {
 		return nil, err
+	}
+	if !ds.ACL.Allows(tenants) {
+		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问数据源 %q", ErrForbidden, datasourceKey)
 	}
 	expr, ok := ds.DimMap[field]
 	if !ok {

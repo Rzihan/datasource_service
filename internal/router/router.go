@@ -35,6 +35,7 @@ func New(d Deps) *gin.Engine {
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestID(d.Config.RequestIDHdr))
 	r.Use(middleware.Operator("X-User"))
+	r.Use(middleware.Tenants("X-Tenants"))
 	r.Use(middleware.Logger())
 	r.Use(middleware.CORS())
 
@@ -51,6 +52,8 @@ func New(d Deps) *gin.Engine {
 		v1.PUT("/datasources/:key", d.DS.Update)
 		v1.DELETE("/datasources/:key", d.DS.Delete)
 
+		// 查询页可选的数据源，已按登录态租户过滤
+		v1.GET("/query/datasources", d.QH.Datasources)
 		// 查询只暴露一个执行接口：前端传「查询意图」，SQL 由后端生成，用户不感知。
 		v1.POST("/query/execute", d.QH.Execute)
 		// 维度候选值，供前端下拉枚举

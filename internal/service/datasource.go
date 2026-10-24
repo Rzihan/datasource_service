@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,9 +23,11 @@ var ErrInvalid = errors.New("invalid argument")
 var keyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.\-]{1,63}$`)
 
 const (
-	maxNameLen = 128
-	maxKeyLen  = 200 // 单个 map 允许的键数量
-	maxValLen  = 1024
+	maxNameLen     = 128
+	maxKeyLen      = 200 // 单个 map 允许的键数量
+	maxValLen      = 1024
+	maxTenantLen   = 64
+	maxTenantCount = 64
 )
 
 // DatasourceService 承载业务规则与入参校验。
@@ -63,6 +66,10 @@ func (s *DatasourceService) Create(ctx context.Context, req *model.CreateRequest
 	if err != nil {
 		return nil, err
 	}
+	acl, err := normalizeACL(req.ACL)
+	if err != nil {
+		return nil, err
+	}
 	status := model.StatusEnabled
 	if req.Status != nil {
 		status = *req.Status
@@ -79,6 +86,7 @@ func (s *DatasourceService) Create(ctx context.Context, req *model.CreateRequest
 		DimMap:         dimMap,
 		MtxMap:         mtxMap,
 		LabelMap:       labelMap,
+		ACL:            acl,
 		Status:         status,
 		Version:        0,
 		CreatedBy:      operator,
@@ -144,6 +152,10 @@ func (s *DatasourceService) Update(ctx context.Context, key string, req *model.U
 	if err != nil {
 		return nil, err
 	}
+	acl, err := normalizeACL(req.ACL)
+	if err != nil {
+		return nil, err
+	}
 	status := model.StatusEnabled
 	if req.Status != nil {
 		status = *req.Status
@@ -159,6 +171,7 @@ func (s *DatasourceService) Update(ctx context.Context, key string, req *model.U
 		DimMap:         dimMap,
 		MtxMap:         mtxMap,
 		LabelMap:       labelMap,
+		ACL:            acl,
 		Status:         status,
 		UpdatedBy:      operator,
 	}
@@ -189,6 +202,9 @@ func (s *DatasourceService) Validate(ctx context.Context, req *model.ValidateReq
 	if _, err := normalizeStringMap(req.LabelMap, "label_map"); err != nil {
 		return err
 	}
+	if _, err := normalizeACL(req.ACL); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -202,6 +218,33 @@ func (s *DatasourceService) checkMidSQL(sql string) error {
 		return fmt.Errorf("%w: mid_sql is %d bytes, exceeds the %d bytes limit", ErrInvalid, n, s.maxSQLBytes)
 	}
 	return nil
+}
+
+// normalizeACL 校验并归一化访问控制：
+//   - 租户名去空白、丢弃空串、去重，并按字典序排序（保证落库稳定、便于比对）
+//   - 空列表一律落成 {} 而不是 {"tenants":null}：null 会让 JSON 函数把它当成一个元素
+func normalizeACL(a model.ACL) (model.ACL, error) {
+	seen := make(map[string]struct{}, len(a.Tenants))
+	out := make([]string, 0, len(a.Tenants))
+	for _, t := range a.Tenants {
+		tt := strings.TrimSpace(t)
+		if tt == "" {
+			continue
+		}
+		if len(tt) > maxTenantLen {
+			return model.ACL{}, fmt.Errorf("%w: tenant %q exceeds %d bytes", ErrInvalid, t, maxTenantLen)
+		}
+		if _, ok := seen[tt]; ok {
+			continue
+		}
+		seen[tt] = struct{}{}
+		out = append(out, tt)
+	}
+	if len(out) > maxTenantCount {
+		return model.ACL{}, fmt.Errorf("%w: too many tenants (max %d)", ErrInvalid, maxTenantCount)
+	}
+	sort.Strings(out)
+	return model.ACL{Tenants: out}, nil
 }
 
 func normalizeKey(raw string) (string, error) {

@@ -83,6 +83,24 @@ export default function DatasourceList() {
       render: (v: Record<string, string>) => `${Object.keys(v ?? {}).length} 项`,
     },
     {
+      title: '租户白名单',
+      dataIndex: 'acl',
+      width: 180,
+      render: (acl: DatasourceConfig['acl']) => {
+        const list = acl?.tenants ?? [];
+        if (list.length === 0) {
+          return <Typography.Text type="secondary">不限制</Typography.Text>;
+        }
+        return (
+          <Space size={4} wrap>
+            {list.map((t) => (
+              <Tag key={t} color="blue">{t}</Tag>
+            ))}
+          </Space>
+        );
+      },
+    },
+    {
       title: 'mid_sql',
       dataIndex: 'mid_sql',
       ellipsis: true,

@@ -2,15 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { App, Alert, Card, Col, Row, Spin } from 'antd';
 import QueryBuilder from '../components/QueryBuilder';
 import ResultView from '../components/ResultView';
-import { executeQuery, fetchDimValues, fetchList } from '../api';
-import type { DatasourceConfig, FilterNode, OrderBy, QueryResult } from '../types';
+import { executeQuery, fetchDimValues, fetchQueryDatasources } from '../api';
+import type { FilterNode, OrderBy, QueryDatasource, QueryResult } from '../types';
 import { emptyRoot, pruneEmpty } from '../utils/filterTree';
-
-const MAX_DATASOURCES = 200;
+import { subscribeTenants } from '../tenants';
 
 export default function QueryPage() {
   const { message } = App.useApp();
-  const [datasources, setDatasources] = useState<DatasourceConfig[]>([]);
+  const [datasources, setDatasources] = useState<QueryDatasource[]>([]);
   const [loadingList, setLoadingList] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string>('');
   const [dims, setDims] = useState<string[]>([]);
@@ -24,10 +23,11 @@ export default function QueryPage() {
   const [dimValues, setDimValues] = useState<Record<string, string[]>>({});
   const [dimValueLoading, setDimValueLoading] = useState<Record<string, boolean>>({});
 
+  // 这里拿的是「按登录态租户过滤后」的数据源，所以看不到就说明没权限
   const loadDatasources = useCallback(async () => {
     setLoadingList(true);
     try {
-      const res = await fetchList({ page: 1, size: MAX_DATASOURCES });
+      const res = await fetchQueryDatasources();
       setDatasources(res.items ?? []);
     } catch (e) {
       message.error((e as Error).message || '加载数据源失败');
@@ -38,12 +38,28 @@ export default function QueryPage() {
 
   useEffect(() => {
     void loadDatasources();
+    // 顶栏切换租户后要重新拉一次可见数据源
+    return subscribeTenants(() => void loadDatasources());
   }, [loadDatasources]);
 
   const selected = useMemo(
     () => datasources.find((d) => d.datasource_key === selectedKey) ?? null,
     [datasources, selectedKey],
   );
+
+  // 切换租户后当前数据源可能已不可见，这时要把选择清掉，避免拿着看不到的 key 去查
+  useEffect(() => {
+    if (selectedKey && datasources.length > 0 && !datasources.some((d) => d.datasource_key === selectedKey)) {
+      setSelectedKey('');
+      setDims([]);
+      setMetrics([]);
+      setFilterTree(emptyRoot());
+      setOrderBy(null);
+      setResult(null);
+      setError('');
+      setDimValues({});
+    }
+  }, [datasources, selectedKey]);
 
   // 切换数据源时重置选择：不同数据源的维度/指标完全不同，留着旧的只会报错。
   const onSelectDatasource = (key: string) => {

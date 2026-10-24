@@ -90,13 +90,36 @@ func (r *DatasourceRepo) List(ctx context.Context, q model.ListQuery) ([]*Dataso
 	return items, total, nil
 }
 
+// ListAvailable 查询页使用的数据源列表：未删除，按更新时间倒序，最多 limit 条。
+//
+// 两点刻意的选择：
+//  1. 不做分页、也不在 SQL 侧过滤租户：可见性规则放在 Go 里判断（见 model.ACL.Allows）。
+//     后续还要往 acl 里加 users / roles 等维度，规则集中在一处才不会 SQL 与 Go 各写一遍。
+//     代价是配置表要保持在千行量级——对「数据源配置」完全够用。
+//  2. 不按 status 过滤。停用的数据源是否该从查询页消失是另一个决策，
+//     这次只加租户管控，不动原有行为。
+func (r *DatasourceRepo) ListAvailable(ctx context.Context, limit int) ([]*DatasourceConfigModel, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	var items []*DatasourceConfigModel
+	err := r.alive().WithContext(ctx).
+		Order("updated_at DESC, id DESC").
+		Limit(limit).
+		Find(&items).Error
+	if err != nil {
+		return nil, fmt.Errorf("list available datasource: %w", err)
+	}
+	return items, nil
+}
+
 // Update 带乐观锁的更新。expectedVersion 不匹配时返回 ErrVersionConflict，
 // 保证两个人同时编辑同一条配置时不会静默互相覆盖。
 func (r *DatasourceRepo) Update(ctx context.Context, m *DatasourceConfigModel, expectedVersion int) error {
 	m.Version = expectedVersion + 1
 	res := r.db.WithContext(ctx).Model(&DatasourceConfigModel{}).
 		Where("datasource_key = ? AND deleted_at = 0 AND version = ?", m.DatasourceKey, expectedVersion).
-		Select("datasource_name", "mid_sql", "dim_map", "mtx_map", "label_map", "status", "version", "updated_by", "updated_at").
+		Select("datasource_name", "mid_sql", "dim_map", "mtx_map", "label_map", "acl", "status", "version", "updated_by", "updated_at").
 		Updates(m)
 	if res.Error != nil {
 		if isDuplicate(res.Error) {

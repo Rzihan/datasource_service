@@ -1,6 +1,10 @@
 package query
 
-import "strings"
+import (
+	"strings"
+
+	"datasource_service/internal/model"
+)
 
 // 允许的比较操作符白名单。过滤值一律走 ClickHouse 命名参数绑定，
 // 绝不做字符串拼接——这是整个查询功能唯一的注入面，必须堵死。
@@ -78,6 +82,17 @@ type ExecuteRequest struct {
 	Filter        *FilterNode `json:"filter"`
 	OrderBy       []OrderBy   `json:"order_by"`
 	Limit         int         `json:"limit"`
+}
+
+// QueryDatasource 是查询页看到的数据源。
+// 刻意不含 mid_sql：用户不感知 SQL，没必要把它下发到浏览器。
+type QueryDatasource struct {
+	DatasourceKey  string            `json:"datasource_key"`
+	DatasourceName string            `json:"datasource_name"`
+	DimMap         map[string]string `json:"dim_map"`
+	MtxMap         map[string]string `json:"mtx_map"`
+	LabelMap       map[string]string `json:"label_map"`
+	ACL            model.ACL         `json:"acl"`
 }
 
 // Column 结果列元信息。
