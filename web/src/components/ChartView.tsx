@@ -120,7 +120,9 @@ export default function ChartView({
     data,
     xField: 'x',
     yField: 'y',
-    seriesField: 'series',
+    // G2 v5 用 colorField 做颜色分组，v4 的 seriesField 在这里不生效：
+    // 不设的话所有系列同色，图例永远只有一个条目。
+    colorField: 'series',
     height,
     autoFit: true,
     smooth: type === 'line',

@@ -128,9 +128,11 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
   const dimCols = useMemo(() => dims.filter((d) => colNames.includes(d)), [dims, colNames]);
   const metricCols = useMemo(() => metrics.filter((m) => colNames.includes(m)), [metrics, colNames]);
   const resolvedX = xField && dimCols.includes(xField) ? xField : dimCols[0] ?? '';
+  // 没手动选过时默认全选：查询构建器里勾了哪些指标，就是想看哪些。
+  // 系列太多由 MAX_SERIES 兜底，不会把图撑爆。
   const resolvedYs = useMemo(() => {
     const picked = yFields.filter((m) => metricCols.includes(m));
-    return picked.length > 0 ? picked : metricCols.slice(0, 1);
+    return picked.length > 0 ? picked : metricCols;
   }, [yFields, metricCols]);
   const resolvedGroup =
     groupField && dimCols.includes(groupField) && groupField !== resolvedX ? groupField : '';

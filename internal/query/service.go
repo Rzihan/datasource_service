@@ -5,12 +5,38 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"datasource_service/internal/config"
 	"datasource_service/internal/model"
 	"datasource_service/internal/repo"
 )
+
+// 日志里 SQL 的上限。mid_sql 最长 1 MiB，全量打进日志会把日志撑爆，
+// 排查时通常也只需要看外层的 SELECT / WHERE / GROUP BY 部分。
+const maxLoggedSQL = 2000
+
+func loggableSQL(sqlText string) string {
+	if len(sqlText) <= maxLoggedSQL {
+		return sqlText
+	}
+	return sqlText[:maxLoggedSQL] + fmt.Sprintf(" ...(已截断，共 %d 字节)", len(sqlText))
+}
+
+// formatParams 把绑定参数拼成 p0=北京, rf0=[t1 t2] 这样的形式。
+// SQL 里是 {p0:String} 这样的命名占位符，光看 SQL 文本不知道实际传了什么，
+// 排查「为什么没数据」时参数往往比 SQL 本身更有用。
+func formatParams(params []Param) string {
+	if len(params) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(params))
+	for _, p := range params {
+		parts = append(parts, fmt.Sprintf("%s=%v", p.Name, p.Value))
+	}
+	return strings.Join(parts, ", ")
+}
 
 // Service 查询业务层：取配置 → 组装 SQL → 执行 → 记日志。
 type Service struct {
@@ -169,16 +195,20 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 		slog.Error("query failed",
 			"operator", operator, "datasource_key", ds.DatasourceKey,
 			"dims", req.Dims, "metrics", req.Metrics,
-			"elapsed_ms", elapsed, "error", err, "sql", sqlText,
+			"elapsed_ms", elapsed, "error", err,
+			"sql", loggableSQL(sqlText), "params", formatParams(params),
 		)
 		return nil, err
 	}
 
 	res.ElapsedMs = elapsed
+	// 成功也把 SQL 打出来：日常排查「这个数是怎么算出来的」主要靠这条日志，
+	// 行级权限注入的条件也只在这里能看到全貌。
 	slog.Info("query executed",
 		"operator", operator, "datasource_key", ds.DatasourceKey,
 		"dims", req.Dims, "metrics", req.Metrics, "filters", FilterNodeCount(req.Filter),
 		"rows", res.RowCount, "truncated", res.Truncated, "elapsed_ms", elapsed,
+		"sql", loggableSQL(sqlText), "params", formatParams(params),
 	)
 	return res, nil
 }
@@ -214,9 +244,12 @@ func (s *Service) DimValues(ctx context.Context, datasourceKey, field string, te
 
 	res, err := s.engine.Query(queryCtx, sqlText, params)
 	if err != nil {
-		slog.Error("dim values query failed", "datasource_key", datasourceKey, "field", field, "error", err, "sql", sqlText)
+		slog.Error("dim values query failed", "datasource_key", datasourceKey, "field", field,
+			"error", err, "sql", loggableSQL(sqlText), "params", formatParams(params))
 		return nil, err
 	}
+	slog.Info("dim values query executed", "datasource_key", datasourceKey, "field", field,
+		"rows", len(res.Rows), "sql", loggableSQL(sqlText), "params", formatParams(params))
 
 	values := make([]string, 0, len(res.Rows))
 	for _, row := range res.Rows {
