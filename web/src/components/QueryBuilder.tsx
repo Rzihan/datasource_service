@@ -1,4 +1,4 @@
-import { Alert, Button, Input, InputNumber, Select, Space, Typography } from 'antd';
+import { App, Alert, Button, Input, InputNumber, Select, Space, Typography } from 'antd';
 import { DeleteOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import type { DatasourceConfig, Filter, OrderBy } from '../types';
 
@@ -38,6 +38,7 @@ export default function QueryBuilder(props: Props) {
     dimValues, dimValueLoading, onRequestDimValues,
     onExecute, loading,
   } = props;
+  const { modal } = App.useApp();
 
   // 有中文含义就显示「中文（key）」，没有就退回 key
   const labelMap = selected?.label_map ?? {};
@@ -47,6 +48,10 @@ export default function QueryBuilder(props: Props) {
   const mtxOptions = Object.keys(selected?.mtx_map ?? {}).sort();
   const sortableOptions = [...dims, ...metrics];
 
+  // 只有已勾选的指标才能用来过滤：没勾选的指标不会出现在结果里，
+  // 拿它做过滤条件用户看不到依据，语义上也说不通。
+  const filterableMetrics = mtxOptions.filter((k) => metrics.includes(k));
+
   const updateFilter = (index: number, patch: Partial<Filter>) => {
     const next = filters.map((f, i) => (i === index ? { ...f, ...patch } : f));
     onFiltersChange(next);
@@ -55,13 +60,50 @@ export default function QueryBuilder(props: Props) {
   // 过滤字段下拉：维度走 WHERE、指标走 HAVING，分组展示避免混淆
   const filterFieldOptions = [
     { label: '维度（行级过滤）', options: dimOptions.map((k) => ({ value: k, label: optionLabel(k) })) },
-    { label: '指标（聚合后过滤）', options: mtxOptions.map((k) => ({ value: k, label: optionLabel(k) })) },
+    { label: '指标（聚合后过滤）', options: filterableMetrics.map((k) => ({ value: k, label: optionLabel(k) })) },
   ].filter((g) => g.options.length > 0);
 
   const isMetricField = (field: string) => mtxOptions.includes(field);
 
+  // 取消勾选指标时，挂在该指标上的过滤条件必须一起清掉，否则会提交一个
+  // 用户看不懂的查询。清除前先弹确认，说明要动哪些东西。
+  const handleMetricsChange = (next: string[]) => {
+    const removed = metrics.filter((m) => !next.includes(m));
+    const affectedFilters = filters.filter((f) => removed.includes(f.field));
+    const affectedSort = orderBy && removed.includes(orderBy.field) ? orderBy.field : '';
+    if (affectedFilters.length === 0 && !affectedSort) {
+      onMetricsChange(next);
+      return;
+    }
+
+    const parts: string[] = [];
+    if (affectedFilters.length > 0) {
+      const names = [...new Set(affectedFilters.map((f) => f.field))]
+        .map((m) => `「${optionLabel(m)}」`)
+        .join('、');
+      parts.push(`指标 ${names} 上的 ${affectedFilters.length} 个过滤条件会被清除`);
+    }
+    if (affectedSort) {
+      parts.push(`排序字段「${optionLabel(affectedSort)}」已失效，会被清空`);
+    }
+
+    modal.confirm({
+      title: '取消勾选指标',
+      content: `${parts.join('；')}。是否继续？`,
+      okText: '继续',
+      cancelText: '放弃',
+      onOk: () => {
+        onMetricsChange(next);
+        if (affectedFilters.length > 0) {
+          onFiltersChange(filters.filter((f) => !removed.includes(f.field)));
+        }
+        if (affectedSort) onOrderByChange(null);
+      },
+    });
+  };
+
   const addFilter = () => {
-    const field = dimOptions[0] ?? mtxOptions[0] ?? '';
+    const field = dimOptions[0] ?? filterableMetrics[0] ?? '';
     const next = [...filters, { field, op: isMetricField(field) ? '>' : '=', value: '' }];
     onFiltersChange(next);
     // 指标没有候选值（不查 distinct），只有维度才去拉
@@ -111,7 +153,7 @@ export default function QueryBuilder(props: Props) {
           placeholder={selected ? '选择指标' : '请先选择数据源'}
           disabled={!selected}
           value={metrics}
-          onChange={onMetricsChange}
+          onChange={handleMetricsChange}
           options={mtxOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
         />
       </div>
@@ -125,7 +167,7 @@ export default function QueryBuilder(props: Props) {
             type="link"
             size="small"
             icon={<PlusOutlined />}
-            disabled={!selected || (dimOptions.length === 0 && mtxOptions.length === 0)}
+            disabled={!selected || (dimOptions.length === 0 && filterableMetrics.length === 0)}
             onClick={addFilter}
           >
             添加

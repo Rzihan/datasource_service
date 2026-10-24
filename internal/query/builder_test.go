@@ -259,17 +259,31 @@ func TestBuildMetricFilterUsesAliasWhenSelected(t *testing.T) {
 	}
 }
 
-// 指标没被选中时，SELECT 里没有别名可用，HAVING 只能写原始聚合表达式。
-func TestBuildMetricFilterUsesExprWhenNotSelected(t *testing.T) {
+// 未勾选的指标不允许用于过滤：它不会出现在结果里，拿它过滤用户看不到依据。
+func TestBuildMetricFilterRejectsUnselectedMetric(t *testing.T) {
 	spec := baseSpec()
 	spec.Metrics = []string{"cost"}
+	spec.Filters = []Filter{{Field: "click", Op: ">", Value: "100"}}
+	_, _, err := Build(spec)
+	if err == nil {
+		t.Fatal("expected error when filtering on an unselected metric")
+	}
+	if !strings.Contains(err.Error(), "未被勾选") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// 勾选了多个指标时，各自都能作为过滤字段。
+func TestBuildMetricFilterOnSecondSelectedMetric(t *testing.T) {
+	spec := baseSpec()
+	spec.Metrics = []string{"cost", "click"}
 	spec.Filters = []Filter{{Field: "click", Op: ">", Value: "100"}}
 	sql, _, err := Build(spec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(sql, "HAVING sum(clicks) > {p0:Float64}") {
-		t.Fatalf("expected HAVING with raw aggregate expr, got:\n%s", sql)
+	if !strings.Contains(sql, "HAVING `click` > {p0:Float64}") {
+		t.Fatalf("unexpected sql:\n%s", sql)
 	}
 }
 

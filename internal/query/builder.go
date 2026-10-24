@@ -75,23 +75,26 @@ func Build(spec Spec) (string, []Param, error) {
 	var params []Param
 	for i, f := range spec.Filters {
 		dimExpr, isDim := spec.DimMap[f.Field]
-		mtxExpr, isMtx := spec.MtxMap[f.Field]
+		// 指标不需要表达式：校验通过后 HAVING 直接引用别名
+		_, isMtx := spec.MtxMap[f.Field]
 		var expr string
 		var isMetric bool
 		switch {
 		case isDim:
 			expr = dimExpr
 		case isMtx:
-			expr = mtxExpr
 			isMetric = true
-			// 若该指标同时也被选中，HAVING 必须引用 SELECT 的别名，不能重复写聚合表达式。
-			// 因为 ClickHouse 会把 SELECT 的别名带进 HAVING：当指标 key 与表达式里的列名
-			// 同名时（例如 mtx_map 的 click -> sum(clicks) 且别名也叫 click），
+			// 指标必须已被勾选才允许过滤：没勾选的指标不会出现在结果里，
+			// 拿它做过滤条件，用户看不到任何依据，语义上说不通。
+			if !contains(spec.Metrics, f.Field) {
+				return "", nil, fmt.Errorf("%w: 过滤指标 %q 未被勾选，只有已选择的指标才能用于过滤", ErrInvalidQuery, f.Field)
+			}
+			// HAVING 必须引用 SELECT 的别名，不能重复写聚合表达式：
+			// ClickHouse 会把 SELECT 的别名带进 HAVING，当指标 key 与表达式里的列名
+			// 同名时（例如 click -> sum(clicks) 且别名也叫 click），
 			// sum(clicks) 会被解析成对聚合结果再聚合，直接报
 			// "Aggregate function is found inside another aggregate function"。
-			if contains(spec.Metrics, f.Field) {
-				expr = quote(f.Field)
-			}
+			expr = quote(f.Field)
 		default:
 			return "", nil, fmt.Errorf("%w: 过滤字段 %q 不在该数据源的 dim_map / mtx_map 中", ErrInvalidQuery, f.Field)
 		}
