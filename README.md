@@ -103,7 +103,11 @@ deploy/mysql         init.sql 建表脚本
   "datasource_key": "order_daily",
   "dims":    ["date", "city"],        // 必须是该数据源 dim_map 里的 key
   "metrics": ["cost", "click"],       // 必须是该数据源 mtx_map 里的 key
-  "filters": [{"field": "city", "op": "=", "value": "北京"}],
+  // 维度过滤 → WHERE（行级）；指标过滤 → HAVING（聚合后）
+  "filters": [
+    {"field": "city", "op": "=", "value": "北京"},
+    {"field": "cost", "op": ">", "value": "1000"}
+  ],
   "order_by":[{"field": "cost", "desc": true}],
   "limit":   1000                      // 服务端 clamp 到 QUERY_MAX_ROWS
 }
@@ -116,6 +120,7 @@ SELECT stat_date AS `date`, city_code AS `city`, sum(stat_cost) AS `cost`
 FROM ( <mid_sql> ) AS __mid
 WHERE city_code = {p0:String}
 GROUP BY stat_date, city_code
+HAVING `cost` > {p1:Float64}
 ORDER BY `cost` DESC
 LIMIT 1000
 ```
@@ -131,6 +136,20 @@ LIMIT 1000
 
 **安全**：`dims` / `metrics` / `order_by` / 过滤字段全部走白名单枚举校验，前端没有任何通道塞进任意 SQL；
 唯一的自由输入是过滤值，通过 ClickHouse 命名参数绑定，不参与字符串拼接。
+
+**维度过滤与指标过滤**：`filters[].field` 可以是 `dim_map` 的键，也可以是 `mtx_map` 的键。
+前者落到 `WHERE`（先筛行再聚合），后者落到 `HAVING`（先聚合再筛结果），两者语义不同，必须分开。
+指标的值若能解析成数字就绑成 `Float64`，否则退回 `String`——ClickHouse 不允许 `Decimal` 与 `String`
+直接比较，少了这层推断会直接报错。
+
+两个踩过的坑，都写进了单测：
+
+1. **指标不支持 `like`**。聚合结果是数值，模糊匹配没有语义，让它走到 ClickHouse 只会得到
+   `Illegal types ... of arguments` 这种看不懂的报错，所以在组装阶段就拒绝，并提示可用操作符。
+2. **`HAVING` 里要用别名**。当指标 key 与聚合表达式里的列名同名时（例如 `click -> sum(clicks)`，
+   别名也叫 `click`），ClickHouse 会把 SELECT 的别名带进 HAVING，`sum(clicks)` 会被解析成
+   `sum(sum(clicks))`，报 *Aggregate function is found inside another aggregate function*。
+   所以指标若同时被选中，`HAVING` 引用别名；没被选中（SELECT 里没有别名可用）才写原始表达式。
 
 **中文含义（label_map）**：`label_map` 的 key 对应 `dim_map` / `mtx_map` 的键，value 是中文名。
 查询页的勾选控件会显示「消耗（cost）」这种形式，结果表头直接显示中文，

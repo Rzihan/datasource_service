@@ -19,6 +19,14 @@ var allowedOps = map[string]bool{
 	OpLike: true, OpIn: true, OpNotIn: true,
 }
 
+// metricOps 是作用在指标（HAVING）上时允许的操作符。
+// 指标是聚合结果，绝大多数是数值，like 这类字符串匹配没有语义，
+// 与其让 ClickHouse 抛晦涩的类型错误，不如在这里就拒绝并说清楚。
+var metricOps = map[string]bool{
+	OpEq: true, OpNe: true, OpGt: true, OpGte: true, OpLt: true, OpLte: true,
+	OpIn: true, OpNotIn: true,
+}
+
 // Filter 单个过滤条件。Value 用于单值比较，Values 用于 in / not in。
 type Filter struct {
 	Field  string   `json:"field"`

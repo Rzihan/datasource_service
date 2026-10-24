@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -68,32 +69,65 @@ func Build(spec Spec) (string, []Param, error) {
 		selectParts = append(selectParts, fmt.Sprintf("%s AS %s", expr, quote(mtx)))
 	}
 
-	// 过滤只允许作用在维度上。指标过滤属于 HAVING 语义，一期不支持。
-	var whereParts []string
+	// 过滤可以作用在维度（WHERE）或指标（HAVING）上：
+	// 维度是行级过滤，指标是聚合后的过滤，语义不同必须分开。
+	var whereParts, havingParts []string
 	var params []Param
 	for i, f := range spec.Filters {
-		expr, ok := spec.DimMap[f.Field]
-		if !ok {
-			return "", nil, fmt.Errorf("%w: 过滤字段 %q 不在该数据源的 dim_map 中", ErrInvalidQuery, f.Field)
+		dimExpr, isDim := spec.DimMap[f.Field]
+		mtxExpr, isMtx := spec.MtxMap[f.Field]
+		var expr string
+		var isMetric bool
+		switch {
+		case isDim:
+			expr = dimExpr
+		case isMtx:
+			expr = mtxExpr
+			isMetric = true
+			// 若该指标同时也被选中，HAVING 必须引用 SELECT 的别名，不能重复写聚合表达式。
+			// 因为 ClickHouse 会把 SELECT 的别名带进 HAVING：当指标 key 与表达式里的列名
+			// 同名时（例如 mtx_map 的 click -> sum(clicks) 且别名也叫 click），
+			// sum(clicks) 会被解析成对聚合结果再聚合，直接报
+			// "Aggregate function is found inside another aggregate function"。
+			if contains(spec.Metrics, f.Field) {
+				expr = quote(f.Field)
+			}
+		default:
+			return "", nil, fmt.Errorf("%w: 过滤字段 %q 不在该数据源的 dim_map / mtx_map 中", ErrInvalidQuery, f.Field)
 		}
+
 		op := strings.ToLower(strings.TrimSpace(f.Op))
 		if !allowedOps[op] {
 			return "", nil, fmt.Errorf("%w: 不支持的操作符 %q", ErrInvalidQuery, f.Op)
 		}
+		if isMetric && !metricOps[op] {
+			return "", nil, fmt.Errorf("%w: 指标过滤不支持操作符 %q，请使用 = != > >= < <= in not in", ErrInvalidQuery, op)
+		}
+
 		name := fmt.Sprintf("p%d", i)
+		addPart := func(part string) {
+			if isMetric {
+				havingParts = append(havingParts, part)
+			} else {
+				whereParts = append(whereParts, part)
+			}
+		}
+
 		if op == OpIn || op == OpNotIn {
 			if len(f.Values) == 0 {
 				return "", nil, fmt.Errorf("%w: %s 操作需要提供 values", ErrInvalidQuery, op)
 			}
-			whereParts = append(whereParts, fmt.Sprintf("%s %s ({%s:Array(String)})", expr, op, name))
-			params = append(params, Param{Name: name, Value: f.Values})
+			typ, val := arrayParam(isMetric, f.Values)
+			addPart(fmt.Sprintf("%s %s ({%s:%s})", expr, op, name, typ))
+			params = append(params, Param{Name: name, Value: val})
 			continue
 		}
 		if strings.TrimSpace(f.Value) == "" {
 			return "", nil, fmt.Errorf("%w: 过滤字段 %q 的值为空", ErrInvalidQuery, f.Field)
 		}
-		whereParts = append(whereParts, fmt.Sprintf("%s %s {%s:String}", expr, op, name))
-		params = append(params, Param{Name: name, Value: f.Value})
+		typ, val := scalarParam(isMetric, f.Value)
+		addPart(fmt.Sprintf("%s %s {%s:%s}", expr, op, name, typ))
+		params = append(params, Param{Name: name, Value: val})
 	}
 
 	// 排序字段必须是已选中的维度或指标，否则无法在 SELECT 里找到对应列。
@@ -137,6 +171,10 @@ func Build(spec Spec) (string, []Param, error) {
 		sb.WriteString("\nGROUP BY ")
 		sb.WriteString(strings.Join(groupParts, ", "))
 	}
+	if len(havingParts) > 0 {
+		sb.WriteString("\nHAVING ")
+		sb.WriteString(strings.Join(havingParts, " AND "))
+	}
 	if len(orderParts) > 0 {
 		sb.WriteString("\nORDER BY ")
 		sb.WriteString(strings.Join(orderParts, ", "))
@@ -176,4 +214,34 @@ func SortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// scalarParam 推断单个过滤值的参数类型。
+//
+// 关键：指标是聚合结果（Decimal / UInt64 居多），而 ClickHouse 类型严格，
+// "Decimal 与 String 比较" 会直接报错。所以指标过滤的值若能解析成数字，
+// 就以 Float64 绑定；维度过滤一律按 String 处理。
+func scalarParam(isMetric bool, value string) (string, any) {
+	if isMetric {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil {
+			return "Float64", f
+		}
+	}
+	return "String", value
+}
+
+// arrayParam 推断 in / not in 的值列表类型，全部能解析成数字才用 Float64 数组。
+func arrayParam(isMetric bool, values []string) (string, any) {
+	if isMetric {
+		out := make([]float64, 0, len(values))
+		for _, v := range values {
+			f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+			if err != nil {
+				return "Array(String)", values
+			}
+			out = append(out, f)
+		}
+		return "Array(Float64)", out
+	}
+	return "Array(String)", values
 }

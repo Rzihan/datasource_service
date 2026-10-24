@@ -148,6 +148,155 @@ func TestBuildRejects(t *testing.T) {
 	}
 }
 
+// 指标过滤必须落到 HAVING，且数值要绑成 Float64——
+// ClickHouse 不允许 Decimal 与 String 直接比较。
+func TestBuildMetricFilterGoesToHaving(t *testing.T) {
+	spec := baseSpec()
+	spec.Filters = []Filter{{Field: "cost", Op: ">", Value: "1000"}}
+	sql, params, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "HAVING `cost` > {p0:Float64}") {
+		t.Fatalf("expected HAVING with Float64 param, got:\n%s", sql)
+	}
+	if strings.Contains(sql, "WHERE") {
+		t.Fatalf("metric filter should not go to WHERE:\n%s", sql)
+	}
+	if len(params) != 1 {
+		t.Fatalf("unexpected params: %+v", params)
+	}
+	if v, ok := params[0].Value.(float64); !ok || v != 1000 {
+		t.Fatalf("value should be float64(1000), got %#v", params[0].Value)
+	}
+}
+
+// 维度过滤仍然走 WHERE，参数保持 String。
+func TestBuildDimFilterStillUsesWhere(t *testing.T) {
+	spec := baseSpec()
+	spec.Filters = []Filter{{Field: "city", Op: "=", Value: "1000"}}
+	sql, params, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "WHERE city_code = {p0:String}") {
+		t.Fatalf("dim filter should stay in WHERE with String param:\n%s", sql)
+	}
+	if _, ok := params[0].Value.(string); !ok {
+		t.Fatalf("dim filter value should stay string, got %#v", params[0].Value)
+	}
+}
+
+// 维度与指标同时过滤时，WHERE 与 HAVING 应共存且参数编号不冲突。
+func TestBuildMixedFilters(t *testing.T) {
+	spec := baseSpec()
+	spec.Filters = []Filter{
+		{Field: "city", Op: "=", Value: "北京"},
+		{Field: "cost", Op: ">=", Value: "500"},
+	}
+	sql, params, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "WHERE city_code = {p0:String}") ||
+		!strings.Contains(sql, "HAVING `cost` >= {p1:Float64}") {
+		t.Fatalf("unexpected sql:\n%s", sql)
+	}
+	if len(params) != 2 {
+		t.Fatalf("unexpected params: %+v", params)
+	}
+}
+
+// 指标过滤的值不是数字时（比如写错了），退化为 String 参数，
+// 由 ClickHouse 报错，而不是在组装阶段就崩掉。
+func TestBuildMetricFilterNonNumeric(t *testing.T) {
+	spec := baseSpec()
+	spec.Filters = []Filter{{Field: "cost", Op: "=", Value: "abc"}}
+	sql, params, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "HAVING `cost` = {p0:String}") {
+		t.Fatalf("unexpected sql:\n%s", sql)
+	}
+	if _, ok := params[0].Value.(string); !ok {
+		t.Fatalf("non numeric value should stay string, got %#v", params[0].Value)
+	}
+}
+
+func TestBuildMetricInFilter(t *testing.T) {
+	spec := baseSpec()
+	spec.Filters = []Filter{{Field: "cost", Op: "in", Values: []string{"100", "200"}}}
+	sql, params, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "HAVING `cost` in ({p0:Array(Float64)})") {
+		t.Fatalf("unexpected sql:\n%s", sql)
+	}
+	vals, ok := params[0].Value.([]float64)
+	if !ok || len(vals) != 2 || vals[0] != 100 {
+		t.Fatalf("unexpected param value: %#v", params[0].Value)
+	}
+}
+
+// 回归：当指标 key 与聚合表达式里的列名同名时（click -> sum(clicks)），
+// 若该指标同时被选中，HAVING 必须用别名，否则 ClickHouse 会判定为
+// 聚合函数嵌套聚合函数。
+func TestBuildMetricFilterUsesAliasWhenSelected(t *testing.T) {
+	spec := baseSpec()
+	spec.Metrics = []string{"click"}
+	spec.Filters = []Filter{{Field: "click", Op: ">", Value: "100"}}
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "HAVING `click` > {p0:Float64}") {
+		t.Fatalf("expected HAVING to reference alias, got:\n%s", sql)
+	}
+	if strings.Contains(sql, "HAVING sum(clicks)") {
+		t.Fatalf("HAVING must not repeat the aggregate expression:\n%s", sql)
+	}
+}
+
+// 指标没被选中时，SELECT 里没有别名可用，HAVING 只能写原始聚合表达式。
+func TestBuildMetricFilterUsesExprWhenNotSelected(t *testing.T) {
+	spec := baseSpec()
+	spec.Metrics = []string{"cost"}
+	spec.Filters = []Filter{{Field: "click", Op: ">", Value: "100"}}
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "HAVING sum(clicks) > {p0:Float64}") {
+		t.Fatalf("expected HAVING with raw aggregate expr, got:\n%s", sql)
+	}
+}
+
+func TestBuildMetricFilterRejectsLike(t *testing.T) {
+	spec := baseSpec()
+	spec.Filters = []Filter{{Field: "cost", Op: "like", Value: "25%"}}
+	_, _, err := Build(spec)
+	if err == nil {
+		t.Fatal("expected error for like on metric")
+	}
+	if !strings.Contains(err.Error(), "指标过滤不支持操作符") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildDimFilterStillAllowsLike(t *testing.T) {
+	spec := baseSpec()
+	spec.Filters = []Filter{{Field: "city", Op: "like", Value: "杭%"}}
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "WHERE city_code like {p0:String}") {
+		t.Fatalf("unexpected sql:\n%s", sql)
+	}
+}
+
 func TestBuildDimValuesSQL(t *testing.T) {
 	sql := BuildDimValuesSQL("select city_code from t", "city_code", 500)
 	if !strings.Contains(sql, "SELECT DISTINCT city_code AS value") || !strings.Contains(sql, "LIMIT 500") {

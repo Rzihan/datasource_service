@@ -24,6 +24,8 @@ interface Props {
 }
 
 const OPS = ['=', '!=', '>', '>=', '<', '<=', 'like', 'in', 'not in'];
+// 指标是聚合出来的数值，模糊匹配没有语义，后端也会直接拒绝
+const METRIC_OPS = ['=', '!=', '>', '>=', '<', '<=', 'in', 'not in'];
 const MULTI_VALUE_OPS = ['in', 'not in'];
 
 export default function QueryBuilder(props: Props) {
@@ -50,11 +52,20 @@ export default function QueryBuilder(props: Props) {
     onFiltersChange(next);
   };
 
+  // 过滤字段下拉：维度走 WHERE、指标走 HAVING，分组展示避免混淆
+  const filterFieldOptions = [
+    { label: '维度（行级过滤）', options: dimOptions.map((k) => ({ value: k, label: optionLabel(k) })) },
+    { label: '指标（聚合后过滤）', options: mtxOptions.map((k) => ({ value: k, label: optionLabel(k) })) },
+  ].filter((g) => g.options.length > 0);
+
+  const isMetricField = (field: string) => mtxOptions.includes(field);
+
   const addFilter = () => {
-    const field = dimOptions[0] ?? '';
-    const next = [...filters, { field, op: '=', value: '' }];
+    const field = dimOptions[0] ?? mtxOptions[0] ?? '';
+    const next = [...filters, { field, op: isMetricField(field) ? '>' : '=', value: '' }];
     onFiltersChange(next);
-    if (field) onRequestDimValues(field);
+    // 指标没有候选值（不查 distinct），只有维度才去拉
+    if (field && !isMetricField(field)) onRequestDimValues(field);
   };
 
   return (
@@ -114,7 +125,7 @@ export default function QueryBuilder(props: Props) {
             type="link"
             size="small"
             icon={<PlusOutlined />}
-            disabled={!selected || dimOptions.length === 0}
+            disabled={!selected || (dimOptions.length === 0 && mtxOptions.length === 0)}
             onClick={addFilter}
           >
             添加
@@ -129,36 +140,47 @@ export default function QueryBuilder(props: Props) {
           {filters.map((f, i) => {
             const multi = MULTI_VALUE_OPS.includes(f.op);
             const values = dimValues[f.field] ?? [];
+            // 指标是聚合结果，后端会做数值比较：不给 like，且值只能手输
+            const metric = isMetricField(f.field);
+            const ops = metric ? METRIC_OPS : OPS;
             return (
               <Space.Compact key={i} style={{ width: '100%' }}>
                 <Select
                   style={{ width: '32%' }}
                   value={f.field}
-                  options={dimOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
+                  options={filterFieldOptions}
                   onChange={(v) => {
-                    updateFilter(i, { field: v, value: '', values: [] });
-                    onRequestDimValues(v);
+                    const toMetric = isMetricField(v);
+                    updateFilter(i, {
+                      field: v,
+                      // 从维度切到指标时，若当前是 like 则要换掉，否则后端会拒绝
+                      op: toMetric && !METRIC_OPS.includes(f.op) ? '>' : f.op,
+                      value: '',
+                      values: [],
+                    });
+                    if (!toMetric) onRequestDimValues(v);
                   }}
                 />
                 <Select
                   style={{ width: '22%' }}
                   value={f.op}
-                  options={OPS.map((o) => ({ value: o, label: o }))}
+                  options={ops.map((o) => ({ value: o, label: o }))}
                   onChange={(v) =>
                     updateFilter(i, { op: v, value: multi ? '' : f.value, values: multi ? f.values ?? [] : [] })
                   }
                 />
                 {multi ? (
                   <Select
-                    mode="multiple"
+                    mode={metric ? 'tags' : 'multiple'}
                     style={{ width: '38%' }}
-                    placeholder="选择值"
-                    loading={dimValueLoading[f.field]}
+                    placeholder={metric ? '输入数值后回车' : '选择值'}
+                    tokenSeparators={metric ? [','] : undefined}
+                    loading={!metric && dimValueLoading[f.field]}
                     value={f.values ?? []}
                     onChange={(v) => updateFilter(i, { values: v })}
                     options={values.map((v) => ({ value: v, label: v }))}
                   />
-                ) : values.length > 0 ? (
+                ) : values.length > 0 && !metric ? (
                   <Select
                     showSearch
                     style={{ width: '38%' }}
@@ -171,7 +193,7 @@ export default function QueryBuilder(props: Props) {
                 ) : (
                   <Input
                     style={{ width: '38%' }}
-                    placeholder="值"
+                    placeholder={metric ? '数值' : '值'}
                     value={f.value}
                     onChange={(e) => updateFilter(i, { value: e.target.value })}
                   />
