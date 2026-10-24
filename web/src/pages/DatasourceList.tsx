@@ -85,17 +85,33 @@ export default function DatasourceList() {
     {
       title: '租户白名单',
       dataIndex: 'acl',
-      width: 180,
+      width: 220,
       render: (acl: DatasourceConfig['acl']) => {
         const list = acl?.tenants ?? [];
-        if (list.length === 0) {
+        const cols = Object.keys(acl?.col_tenants ?? {});
+        if (list.length === 0 && cols.length === 0) {
           return <Typography.Text type="secondary">不限制</Typography.Text>;
         }
         return (
-          <Space size={4} wrap>
-            {list.map((t) => (
-              <Tag key={t} color="blue">{t}</Tag>
-            ))}
+          <Space direction="vertical" size={2}>
+            {list.length > 0 && (
+              <Space size={4} wrap>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>数据源</Typography.Text>
+                {list.map((t) => (
+                  <Tag key={t} color="blue">{t}</Tag>
+                ))}
+              </Space>
+            )}
+            {cols.length > 0 && (
+              <Space size={4} wrap>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>列</Typography.Text>
+                {cols.map((c) => (
+                  <Tooltip key={c} title={`${c}: ${(acl?.col_tenants?.[c] ?? []).join('、')}`}>
+                    <Tag color="geekblue">{c}</Tag>
+                  </Tooltip>
+                ))}
+              </Space>
+            )}
           </Space>
         );
       },

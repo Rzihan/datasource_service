@@ -11,11 +11,11 @@ func TestParseTenants(t *testing.T) {
 		{"   ", []string{}},
 		{"t1", []string{"t1"}},
 		{"t1,t2", []string{"t1", "t2"}},
-		{" t1 , t2 ", []string{"t1", "t2"}},   // 去空白
-		{"t1,,t2,", []string{"t1", "t2"}},     // 丢弃空串
-		{"t1,t1,t2", []string{"t1", "t2"}},    // 去重
-		{"b,a,b", []string{"b", "a"}},         // 去重后保持原有顺序
-		{"t1;t2", []string{"t1;t2"}},          // 只按逗号分隔，分号不算分隔符
+		{" t1 , t2 ", []string{"t1", "t2"}}, // 去空白
+		{"t1,,t2,", []string{"t1", "t2"}},   // 丢弃空串
+		{"t1,t1,t2", []string{"t1", "t2"}},  // 去重
+		{"b,a,b", []string{"b", "a"}},       // 去重后保持原有顺序
+		{"t1;t2", []string{"t1;t2"}},        // 只按逗号分隔，分号不算分隔符
 	}
 
 	for _, c := range cases {

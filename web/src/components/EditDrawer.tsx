@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import { App, Button, Drawer, Form, Input, Select, Space, Switch, Typography } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { App, Button, Drawer, Form, Input, Space, Switch, Typography } from 'antd';
 import SqlEditor from './SqlEditor';
 import StringMapEditor from './StringMapEditor';
 import { createDatasource, updateDatasource } from '../api';
-import type { DatasourceConfig, StringMap } from '../types';
+import type { ACL, DatasourceConfig, StringMap } from '../types';
 
 interface Props {
   open: boolean;
@@ -26,7 +26,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   const [dimMap, setDimMap] = useState<StringMap>({});
   const [mtxMap, setMtxMap] = useState<StringMap>({});
   const [labelMap, setLabelMap] = useState<StringMap>({});
-  const [tenants, setTenants] = useState<string[]>([]);
+  const [aclText, setAclText] = useState('{}');
   const [enabled, setEnabled] = useState(true);
 
   useEffect(() => {
@@ -38,7 +38,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setDimMap(record.dim_map ?? {});
       setMtxMap(record.mtx_map ?? {});
       setLabelMap(record.label_map ?? {});
-      setTenants(record.acl?.tenants ?? []);
+      setAclText(JSON.stringify(record.acl ?? {}, null, 2));
       setEnabled(record.status === 1);
     } else {
       setKey('');
@@ -47,7 +47,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setDimMap({});
       setMtxMap({});
       setLabelMap({});
-      setTenants([]);
+      setAclText('{}');
       setEnabled(true);
     }
   }, [open, record]);
@@ -60,6 +60,17 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
     }
     setLabelMap(next);
   };
+
+  // acl 以纯 JSON 编辑：结构灵活（后续会加 users / roles 等维度），
+  // 与其为每个维度做一套表单控件，不如直接编辑 JSON，校验交给后端。
+  const aclError = useMemo(() => {
+    try {
+      JSON.parse(aclText);
+      return '';
+    } catch (e) {
+      return (e as Error).message;
+    }
+  }, [aclText]);
 
   const save = async () => {
     if (!key.trim()) {
@@ -74,6 +85,11 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       message.warning('请填写 mid_sql');
       return;
     }
+    if (aclError) {
+      message.error(`acl 不是合法 JSON：${aclError}`);
+      return;
+    }
+    const parsedACL = JSON.parse(aclText) as ACL;
     setSaving(true);
     try {
       if (isEdit && record) {
@@ -83,7 +99,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           dim_map: dimMap,
           mtx_map: mtxMap,
           label_map: labelMap,
-          acl: { tenants },
+          acl: parsedACL,
           status: enabled ? 1 : 0,
           version: record.version,
         });
@@ -96,7 +112,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           dim_map: dimMap,
           mtx_map: mtxMap,
           label_map: labelMap,
-          acl: { tenants },
+          acl: parsedACL,
           status: enabled ? 1 : 0,
         });
         message.success('已创建');
@@ -211,16 +227,31 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
         </Form.Item>
 
         <Form.Item
-          label="acl.tenants"
-          extra="租户白名单，用于查询页的数据源级权限管控。留空表示不限制，所有租户可见；填了则登录态租户与白名单有交集才可见"
+          label="acl"
+          validateStatus={aclError ? 'error' : undefined}
+          help={aclError || undefined}
+          extra={
+            <Space direction="vertical" size={2}>
+              <span>
+                数据源级 + 列级租户白名单，用于查询页的权限管控。不配置表示不限制；
+                配置了则登录态租户与白名单有交集才可见。
+              </span>
+              <Typography.Text code>
+                {`{"tenants": ["t1","t2"], "col_tenants": {"${[...Object.keys(dimMap), ...Object.keys(mtxMap)][0] ?? 'cost'}": ["t1"]}}`}
+              </Typography.Text>
+              <span>
+                col_tenants 的 key 必须是下面的维度或指标名之一：
+                {[...Object.keys(dimMap), ...Object.keys(mtxMap)].join('、') || '（请先填维度/指标）'}
+              </span>
+            </Space>
+          }
         >
-          <Select
-            mode="tags"
-            style={{ width: '100%' }}
-            value={tenants}
-            onChange={setTenants}
-            placeholder="留空=不限制，可直接输入租户名后回车"
-            tokenSeparators={[',']}
+          <Input.TextArea
+            value={aclText}
+            onChange={(e) => setAclText(e.target.value)}
+            rows={6}
+            spellCheck={false}
+            style={{ fontFamily: 'monospace', fontSize: 12 }}
           />
         </Form.Item>
       </Form>

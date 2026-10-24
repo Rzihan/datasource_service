@@ -27,3 +27,46 @@ func TestACLAllows(t *testing.T) {
 		})
 	}
 }
+
+func TestACLAllowsColumn(t *testing.T) {
+	acl := ACL{
+		Tenants:    []string{"t1", "t2"},
+		ColTenants: map[string][]string{"cost": {"t1"}, "clicks": {"t9"}},
+	}
+
+	cases := []struct {
+		name    string
+		col     string
+		tenants []string
+		want    bool
+	}{
+		{"没配的列默认可见", "date", nil, true},
+		{"没配的列对任何租户可见", "date", []string{"anyone"}, true},
+		{"配了且有交集", "cost", []string{"t1"}, true},
+		{"多租户登录态命中其中一个", "cost", []string{"x", "t1"}, true},
+		{"配了但无交集", "cost", []string{"t2"}, false},
+		{"登录态无租户时受限列不可见", "cost", nil, false},
+		{"另一个受限列无交集", "clicks", []string{"t1"}, false},
+		{"完全没配 col_tenants 时所有列可见", "cost", nil, true},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := acl
+			if c.name == "完全没配 col_tenants 时所有列可见" {
+				a = ACL{Tenants: []string{"t1"}}
+			}
+			if got := a.AllowsColumn(c.col, c.tenants); got != c.want {
+				t.Fatalf("AllowsColumn(%q, %v) = %v, want %v", c.col, c.tenants, got, c.want)
+			}
+		})
+	}
+}
+
+// 配了空列表等价于「不限制」，与 tenants 的语义保持一致。
+func TestACLAllowsColumnEmptyList(t *testing.T) {
+	acl := ACL{ColTenants: map[string][]string{"cost": {}}}
+	if !acl.AllowsColumn("cost", nil) {
+		t.Fatal("empty whitelist should mean no restriction")
+	}
+}

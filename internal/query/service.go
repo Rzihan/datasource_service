@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"datasource_service/internal/config"
+	"datasource_service/internal/model"
 	"datasource_service/internal/repo"
 )
 
@@ -48,16 +49,44 @@ func (s *Service) VisibleDatasources(ctx context.Context, tenants []string) ([]Q
 		if !it.ACL.Allows(tenants) {
 			continue
 		}
+		dims := filterColumns(it.DimMap, it.ACL, tenants)
+		mtxs := filterColumns(it.MtxMap, it.ACL, tenants)
 		out = append(out, QueryDatasource{
 			DatasourceKey:  it.DatasourceKey,
 			DatasourceName: it.DatasourceName,
-			DimMap:         it.DimMap,
-			MtxMap:         it.MtxMap,
-			LabelMap:       it.LabelMap,
-			ACL:            it.ACL,
+			DimMap:         dims,
+			MtxMap:         mtxs,
+			// label_map 只保留还看得见的列，避免表头里出现用不到的中文名
+			LabelMap: filterColumns(it.LabelMap, it.ACL, tenants),
 		})
 	}
 	return out, nil
+}
+
+// filterColumns 按列级白名单过滤。键名就是维度/指标名，与 label_map 的键一致。
+func filterColumns(m map[string]string, acl model.ACL, tenants []string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if !acl.AllowsColumn(k, tenants) {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// ensureColumnsVisible 校验请求里引用的列对当前登录态是否都可见。
+// 前端下拉已经过滤过，但请求本身可以被直接构造，所以服务端必须再挡一次。
+func ensureColumnsVisible(acl model.ACL, tenants []string, cols ...string) error {
+	for _, c := range cols {
+		if c == "" {
+			continue
+		}
+		if !acl.AllowsColumn(c, tenants) {
+			return fmt.Errorf("%w: 当前登录态的租户无权访问列 %q", ErrForbidden, c)
+		}
+	}
+	return nil
 }
 
 // Execute 执行一次查询。
@@ -72,6 +101,17 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 			"tenants", tenants, "acl_tenants", ds.ACL.Tenants,
 		)
 		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问数据源 %q", ErrForbidden, ds.DatasourceKey)
+	}
+	// 列级管控：维度、指标，以及过滤条件里引用到的字段都要校验。
+	// 过滤条件尤其容易漏——它可以引用没被选为维度的列。
+	if err := ensureColumnsVisible(ds.ACL, tenants, req.Dims...); err != nil {
+		return nil, err
+	}
+	if err := ensureColumnsVisible(ds.ACL, tenants, req.Metrics...); err != nil {
+		return nil, err
+	}
+	if err := ensureColumnsVisible(ds.ACL, tenants, FilterNodeFields(req.Filter)...); err != nil {
+		return nil, err
 	}
 
 	sqlText, params, err := Build(Spec{
@@ -133,6 +173,9 @@ func (s *Service) DimValues(ctx context.Context, datasourceKey, field string, te
 	}
 	if !ds.ACL.Allows(tenants) {
 		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问数据源 %q", ErrForbidden, datasourceKey)
+	}
+	if !ds.ACL.AllowsColumn(field, tenants) {
+		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问列 %q", ErrForbidden, field)
 	}
 	expr, ok := ds.DimMap[field]
 	if !ok {

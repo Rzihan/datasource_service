@@ -10,24 +10,48 @@ const (
 	StatusEnabled  int8 = 1
 )
 
-// ACL 数据源级访问控制，存在 JSON 列 acl 里。
+// ACL 数据源级访问控制，存在 JSON 列 acl 里：
 //
-// 用 JSON 对象而不是纯数组，是为了后续扩展：再加 users / roles / 读写分离等维度时，
+//	{"tenants": ["t1","t2"], "col_tenants": {"stat_date": ["t1"], "cost": ["t1","t2"]}}
+//
+// 用 JSON 对象而不是纯数组，是为了扩展：再加 users / roles / 读写分离等维度时，
 // 往对象里加字段即可，不用改表结构、不用迁存量数据。
 //
-// 语义：Tenants 为空表示不限制（所有租户可见）；非空表示只有与登录态租户存在交集才可见。
+// 两级白名单：
+//   - Tenants：数据源级。空 = 不限制；非空 = 有交集才可见。
+//   - ColTenants：列级。key 是 dim_map / mtx_map 的键（即查询页里看到的维度/指标名），
+//     没配的列默认可见，配了的列有交集才可见。
 type ACL struct {
-	Tenants []string `json:"tenants,omitempty"`
+	Tenants    []string            `json:"tenants,omitempty"`
+	ColTenants map[string][]string `json:"col_tenants,omitempty"`
 }
 
 // Allows 判断给定的登录态租户能否看到该数据源。
 // 空白名单 = 公开，包括登录态没有任何租户的情况。
 func (a ACL) Allows(tenants []string) bool {
-	if len(a.Tenants) == 0 {
+	return intersects(a.Tenants, tenants)
+}
+
+// AllowsColumn 判断某个维度/指标列对当前登录态是否可见。
+// 没配的列默认可见；配了但列表为空同样视为不限制；配了且非空则要有交集。
+func (a ACL) AllowsColumn(col string, tenants []string) bool {
+	if len(a.ColTenants) == 0 {
+		return true
+	}
+	wl, ok := a.ColTenants[col]
+	if !ok || len(wl) == 0 {
+		return true
+	}
+	return intersects(wl, tenants)
+}
+
+// intersects 判断白名单与登录态租户是否有交集。空白名单表示不限制。
+func intersects(whitelist, tenants []string) bool {
+	if len(whitelist) == 0 {
 		return true
 	}
 	for _, t := range tenants {
-		for _, w := range a.Tenants {
+		for _, w := range whitelist {
 			if t == w {
 				return true
 			}

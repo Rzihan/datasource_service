@@ -76,6 +76,60 @@ func TestNormalizeStringMap(t *testing.T) {
 	}
 }
 
+func TestNormalizeACL(t *testing.T) {
+	dimMap := map[string]string{"stat_date": "stat_date", "city": "city_code"}
+	mtxMap := map[string]string{"cost": "sum(stat_cost)"}
+
+	got, err := normalizeACL(model.ACL{
+		Tenants:    []string{" t2 ", "t1", "t1", ""},
+		ColTenants: map[string][]string{"cost": {"t1"}, "stat_date": {"t1", " t1 ", ""}},
+	}, dimMap, mtxMap)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 去空白 + 去重 + 排序
+	if len(got.Tenants) != 2 || got.Tenants[0] != "t1" || got.Tenants[1] != "t2" {
+		t.Fatalf("unexpected tenants: %v", got.Tenants)
+	}
+	if len(got.ColTenants["stat_date"]) != 1 || got.ColTenants["stat_date"][0] != "t1" {
+		t.Fatalf("unexpected col_tenants: %v", got.ColTenants)
+	}
+
+	// 空列表等价于「不限制」，直接不落这一项
+	got, err = normalizeACL(model.ACL{ColTenants: map[string][]string{"cost": {}}}, dimMap, mtxMap)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := got.ColTenants["cost"]; ok {
+		t.Fatalf("empty whitelist should be dropped, got %v", got.ColTenants)
+	}
+}
+
+// 维度键与指标键都可以作为 col_tenants 的 key。
+func TestNormalizeACLAllowsDimOrMtxKey(t *testing.T) {
+	dimMap := map[string]string{"stat_date": "stat_date"}
+	mtxMap := map[string]string{"cost": "sum(stat_cost)"}
+
+	if _, err := normalizeACL(model.ACL{
+		ColTenants: map[string][]string{"stat_date": {"t1"}, "cost": {"t2"}},
+	}, dimMap, mtxMap); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// col_tenants 拼错列名会让该列静默保持可见（权限配置 fail-open），必须挡住。
+func TestNormalizeACLRejectsUnknownColumn(t *testing.T) {
+	dimMap := map[string]string{"stat_date": "stat_date"}
+	mtxMap := map[string]string{"cost": "sum(stat_cost)"}
+
+	_, err := normalizeACL(model.ACL{
+		ColTenants: map[string][]string{"stat_datee": {"t1"}},
+	}, dimMap, mtxMap)
+	if err == nil {
+		t.Fatal("expected error for unknown column in col_tenants")
+	}
+}
+
 // Create 的入参校验失败时不应该触达数据库，这里 repo 为 nil，
 // 一旦调用到 repo 会 panic，正好验证「校验先行」。
 func TestCreateRejectsInvalidInputBeforeHittingRepo(t *testing.T) {

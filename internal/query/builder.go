@@ -323,6 +323,24 @@ func collectAll(subs []cond, pick func(cond) string) ([]string, bool) {
 	return out, true
 }
 
+// FilterNodeFields 收集条件树里引用到的所有字段名，用于列级权限校验。
+func FilterNodeFields(n *FilterNode) []string {
+	if n == nil {
+		return nil
+	}
+	if !n.IsGroup() {
+		if n.Field == "" {
+			return nil
+		}
+		return []string{n.Field}
+	}
+	out := make([]string, 0, len(n.Children))
+	for i := range n.Children {
+		out = append(out, FilterNodeFields(&n.Children[i])...)
+	}
+	return out
+}
+
 // FilterNodeCount 统计条件树的节点总数（日志用）。
 func FilterNodeCount(n *FilterNode) int {
 	if n == nil {

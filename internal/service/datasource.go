@@ -66,7 +66,7 @@ func (s *DatasourceService) Create(ctx context.Context, req *model.CreateRequest
 	if err != nil {
 		return nil, err
 	}
-	acl, err := normalizeACL(req.ACL)
+	acl, err := normalizeACL(req.ACL, dimMap, mtxMap)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +152,7 @@ func (s *DatasourceService) Update(ctx context.Context, key string, req *model.U
 	if err != nil {
 		return nil, err
 	}
-	acl, err := normalizeACL(req.ACL)
+	acl, err := normalizeACL(req.ACL, dimMap, mtxMap)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +202,7 @@ func (s *DatasourceService) Validate(ctx context.Context, req *model.ValidateReq
 	if _, err := normalizeStringMap(req.LabelMap, "label_map"); err != nil {
 		return err
 	}
-	if _, err := normalizeACL(req.ACL); err != nil {
+	if _, err := normalizeACL(req.ACL, req.DimMap, req.MtxMap); err != nil {
 		return err
 	}
 	return nil
@@ -220,19 +220,17 @@ func (s *DatasourceService) checkMidSQL(sql string) error {
 	return nil
 }
 
-// normalizeACL 校验并归一化访问控制：
-//   - 租户名去空白、丢弃空串、去重，并按字典序排序（保证落库稳定、便于比对）
-//   - 空列表一律落成 {} 而不是 {"tenants":null}：null 会让 JSON 函数把它当成一个元素
-func normalizeACL(a model.ACL) (model.ACL, error) {
-	seen := make(map[string]struct{}, len(a.Tenants))
-	out := make([]string, 0, len(a.Tenants))
-	for _, t := range a.Tenants {
+// normalizeTenantList 去空白、丢弃空串、去重并排序，保证落库稳定、便于比对。
+func normalizeTenantList(in []string, field string) ([]string, error) {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, t := range in {
 		tt := strings.TrimSpace(t)
 		if tt == "" {
 			continue
 		}
 		if len(tt) > maxTenantLen {
-			return model.ACL{}, fmt.Errorf("%w: tenant %q exceeds %d bytes", ErrInvalid, t, maxTenantLen)
+			return nil, fmt.Errorf("%w: %s 中的租户 %q exceeds %d bytes", ErrInvalid, field, t, maxTenantLen)
 		}
 		if _, ok := seen[tt]; ok {
 			continue
@@ -241,10 +239,46 @@ func normalizeACL(a model.ACL) (model.ACL, error) {
 		out = append(out, tt)
 	}
 	if len(out) > maxTenantCount {
-		return model.ACL{}, fmt.Errorf("%w: too many tenants (max %d)", ErrInvalid, maxTenantCount)
+		return nil, fmt.Errorf("%w: %s 租户数量超过 %d", ErrInvalid, field, maxTenantCount)
 	}
 	sort.Strings(out)
-	return model.ACL{Tenants: out}, nil
+	return out, nil
+}
+
+// normalizeACL 校验并归一化访问控制：
+//   - 租户列表去空白、去重、排序；空列表一律落成 {} 而不是 {"tenants":null}
+//     ——null 会被 JSON 函数当成「有一个元素」，把「不限制」误判成「受限」
+//   - col_tenants 的 key 必须是该数据源 dim_map / mtx_map 的键：
+//     拼错 key 会让该列静默保持可见（权限配置 fail-open），所以必须挡住并报清楚
+func normalizeACL(a model.ACL, dimMap, mtxMap map[string]string) (model.ACL, error) {
+	tenants, err := normalizeTenantList(a.Tenants, "acl.tenants")
+	if err != nil {
+		return model.ACL{}, err
+	}
+
+	colTenants := make(map[string][]string, len(a.ColTenants))
+	for col, list := range a.ColTenants {
+		col = strings.TrimSpace(col)
+		if col == "" {
+			return model.ACL{}, fmt.Errorf("%w: acl.col_tenants 存在空的列名", ErrInvalid)
+		}
+		_, isDim := dimMap[col]
+		_, isMtx := mtxMap[col]
+		if !isDim && !isMtx {
+			return model.ACL{}, fmt.Errorf("%w: acl.col_tenants 的 %q 不是该数据源的维度或指标", ErrInvalid, col)
+		}
+		norm, err := normalizeTenantList(list, fmt.Sprintf("acl.col_tenants[%q]", col))
+		if err != nil {
+			return model.ACL{}, err
+		}
+		// 空列表等价于「不限制」，直接不落这一项，JSON 更干净
+		if len(norm) == 0 {
+			continue
+		}
+		colTenants[col] = norm
+	}
+
+	return model.ACL{Tenants: tenants, ColTenants: colTenants}, nil
 }
 
 func normalizeKey(raw string) (string, error) {

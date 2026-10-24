@@ -98,24 +98,36 @@ deploy/mysql         init.sql 建表脚本
 **登录态**：顶栏「登录态租户」可填多个租户（一个用户可以属于多个租户），存在浏览器本地，
 随请求头 `X-Tenants: t1,t2` 带给后端——和「操作人」走 `X-User` 是同一套极简模式，系统不接鉴权。
 
-**数据源侧**：配置表新增 JSON 列 `acl`，当前只有一个维度：
+**数据源侧**：配置表新增 JSON 列 `acl`，当前两级白名单，**在配置页以纯 JSON 编辑**：
 
 ```jsonc
-{"tenants": ["t1", "t2"]}   // 只有登录态租户与之有交集才可见
-{}                          // 不填 / 空数组 = 不限制，所有租户可见
+{
+  "tenants": ["t1", "t2"],                              // 数据源级：有交集才可见
+  "col_tenants": {"stat_date": ["t1"], "cost": ["t1", "t2"]}  // 列级：没配的列默认可见
+}
 ```
+
+- `tenants`：数据源级。空 / 不填 = 不限制。
+- `col_tenants`：列级。key 是 `dim_map` / `mtx_map` 的**键**（即查询页里看到的维度/指标名），
+  没配的列默认可见，配了的列有交集才可见。
 
 用 JSON **对象**而不是纯数组，是为了后续扩展：再加 `users` / `roles` / 读写分离时往对象里加字段即可，
 不必改表结构、不必迁存量数据。
+
+列名拼错会让那一列**静默保持可见**——权限配置 fail-open 比报错更危险，
+所以服务层会校验 `col_tenants` 的每个 key 必须属于 `dim_map` / `mtx_map`，否则 400 并列出允许的列名。
 
 **管控范围**：按当前约定只管控**查询页**。
 
 | 接口 | 行为 |
 | --- | --- |
-| `GET /api/v1/query/datasources` | 已按登录态租户过滤（且不含 `mid_sql`） |
-| `POST /api/v1/query/execute` | 无权访问返回 403，并记 WARN 日志 |
+| `GET /api/v1/query/datasources` | 已按数据源级过滤；`dim_map` / `mtx_map` / `label_map` 再按列级过滤。不含 `mid_sql` 与 `acl` |
+| `POST /api/v1/query/execute` | 数据源或列无权访问 → 403，并记 WARN 日志 |
 | `GET /api/v1/datasources/:key/dim-values` | 同上 |
 | 配置管理页的列表/详情/改删 | **不受影响**，所有数据源都可见可改 |
+
+`execute` 除了校验 `dims` / `metrics`，还会**遍历过滤条件树里的所有字段**——
+过滤条件可以引用没被选为维度的列，这是最容易漏掉的一条路径。
 
 可见性规则就一处实现：`model.ACL.Allows`。刻意没把它写进 SQL——后续维度变多时，
 规则集中放在 Go 里才不会出现 SQL 与 Go 各写一遍、两边不一致的情况。
