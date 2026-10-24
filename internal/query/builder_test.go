@@ -287,6 +287,205 @@ func TestBuildMetricFilterOnSecondSelectedMetric(t *testing.T) {
 	}
 }
 
+// ---------- 条件树：AND / OR 组合 ----------
+
+// 纯维度 OR：整组下压到 WHERE。
+func TestBuildTreeOrDimsGoesToWhere(t *testing.T) {
+	spec := baseSpec()
+	spec.Filter = &FilterNode{
+		Logic: "or",
+		Children: []FilterNode{
+			{Field: "city", Op: "=", Value: "北京"},
+			{Field: "city", Op: "=", Value: "上海"},
+		},
+	}
+	sql, params, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "WHERE (city_code = {p0:String} OR city_code = {p1:String})") {
+		t.Fatalf("unexpected sql:\n%s", sql)
+	}
+	if strings.Contains(sql, "HAVING") {
+		t.Fatalf("dim-only OR should stay in WHERE:\n%s", sql)
+	}
+	if len(params) != 2 {
+		t.Fatalf("unexpected params: %+v", params)
+	}
+}
+
+// 纯指标 OR：整组进 HAVING。
+func TestBuildTreeOrMetricsGoesToHaving(t *testing.T) {
+	spec := baseSpec()
+	spec.Metrics = []string{"cost", "click"}
+	spec.Filter = &FilterNode{
+		Logic: "or",
+		Children: []FilterNode{
+			{Field: "cost", Op: ">", Value: "100"},
+			{Field: "click", Op: "<", Value: "200"},
+		},
+	}
+	sql, params, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "HAVING (`cost` > {p0:Float64} OR `click` < {p1:Float64})") {
+		t.Fatalf("unexpected sql:\n%s", sql)
+	}
+	if strings.Contains(sql, "WHERE") {
+		t.Fatalf("metric-only OR should stay in HAVING:\n%s", sql)
+	}
+	if len(params) != 2 {
+		t.Fatalf("unexpected params: %+v", params)
+	}
+}
+
+// 嵌套：维度 AND (指标 OR 指标) —— AND 被拆成 WHERE 与 HAVING 两段。
+func TestBuildTreeNestedAndOrSplitsTwoClauses(t *testing.T) {
+	spec := baseSpec()
+	spec.Metrics = []string{"cost", "click"}
+	spec.Filter = &FilterNode{
+		Logic: "and",
+		Children: []FilterNode{
+			{Field: "city", Op: "=", Value: "北京"},
+			{
+				Logic: "or",
+				Children: []FilterNode{
+					{Field: "cost", Op: ">", Value: "100"},
+					{Field: "click", Op: "<", Value: "200"},
+				},
+			},
+		},
+	}
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "WHERE city_code = {p0:String}") {
+		t.Fatalf("dim condition should be pushed down:\n%s", sql)
+	}
+	if !strings.Contains(sql, "HAVING (`cost` > {p1:Float64} OR `click` < {p2:Float64})") {
+		t.Fatalf("metric OR should land in HAVING:\n%s", sql)
+	}
+}
+
+// 已勾选的维度在聚合后仍有这一列，所以可以和指标用 OR 组合（整体进 HAVING）。
+func TestBuildTreeOrSelectedDimWithMetric(t *testing.T) {
+	spec := baseSpec()
+	spec.Filter = &FilterNode{
+		Logic: "or",
+		Children: []FilterNode{
+			{Field: "date", Op: "=", Value: "2026-01-01"},
+			{Field: "cost", Op: ">", Value: "100"},
+		},
+	}
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "HAVING (`date` = {p0:String} OR `cost` > {p1:Float64})") {
+		t.Fatalf("unexpected sql:\n%s", sql)
+	}
+}
+
+// 未勾选的维度只在聚合前有意义，不能和指标用 OR 连接——必须明确报错。
+func TestBuildTreeRejectsOrBetweenUnselectedDimAndMetric(t *testing.T) {
+	spec := baseSpec()
+	spec.Filter = &FilterNode{
+		Logic: "or",
+		Children: []FilterNode{
+			{Field: "city", Op: "=", Value: "北京"},
+			{Field: "cost", Op: ">", Value: "100"},
+		},
+	}
+	_, _, err := Build(spec)
+	if err == nil {
+		t.Fatal("expected error when OR mixes an unselected dim with a metric")
+	}
+	if !strings.Contains(err.Error(), "不能用 OR 连接") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// 不支持的逻辑运算符要挡住。
+func TestBuildTreeRejectsUnknownLogic(t *testing.T) {
+	spec := baseSpec()
+	spec.Filter = &FilterNode{
+		Logic: "xor",
+		Children: []FilterNode{
+			{Field: "city", Op: "=", Value: "北京"},
+		},
+	}
+	_, _, err := Build(spec)
+	if err == nil || !strings.Contains(err.Error(), "不支持的逻辑运算符") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// 空分组没有意义，直接拒绝。
+func TestBuildTreeRejectsEmptyGroup(t *testing.T) {
+	spec := baseSpec()
+	spec.Filter = &FilterNode{Logic: "and"}
+	_, _, err := Build(spec)
+	if err == nil || !strings.Contains(err.Error(), "至少需要一个条件") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// 条件树是递归结构，必须有规模上限，否则深嵌套会把组装和解析都拖垮。
+func TestBuildTreeDepthLimit(t *testing.T) {
+	nested := func(depth int) FilterNode {
+		node := FilterNode{Field: "city", Op: "=", Value: "北京"}
+		for i := 0; i < depth; i++ {
+			node = FilterNode{Logic: "and", Children: []FilterNode{node}}
+		}
+		return node
+	}
+	spec := baseSpec()
+	ok := nested(4)
+	spec.Filter = &ok
+	if _, _, err := Build(spec); err != nil {
+		t.Fatalf("4 levels of nesting should be allowed: %v", err)
+	}
+
+	spec = baseSpec()
+	tooDeep := nested(5)
+	spec.Filter = &tooDeep
+	if _, _, err := Build(spec); err == nil || !strings.Contains(err.Error(), "嵌套超过") {
+		t.Fatalf("expected depth limit error, got: %v", err)
+	}
+}
+
+// 叶子节点缺少 field 时给出明确错误。
+func TestBuildTreeRejectsLeafWithoutField(t *testing.T) {
+	spec := baseSpec()
+	spec.Filter = &FilterNode{
+		Logic:    "and",
+		Children: []FilterNode{{Op: "=", Value: "北京"}},
+	}
+	_, _, err := Build(spec)
+	if err == nil || !strings.Contains(err.Error(), "缺少 field") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// 扁平 filters 仍然等价于「全部 AND 连接」，保证老调用方不受影响。
+func TestBuildFlatFiltersEqualsAndGroup(t *testing.T) {
+	spec := baseSpec()
+	spec.Filters = []Filter{
+		{Field: "city", Op: "=", Value: "北京"},
+		{Field: "cost", Op: ">", Value: "100"},
+	}
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "WHERE city_code = {p0:String}") ||
+		!strings.Contains(sql, "HAVING `cost` > {p1:Float64}") {
+		t.Fatalf("unexpected sql:\n%s", sql)
+	}
+}
+
 func TestBuildMetricFilterRejectsLike(t *testing.T) {
 	spec := baseSpec()
 	spec.Filters = []Filter{{Field: "cost", Op: "like", Value: "25%"}}

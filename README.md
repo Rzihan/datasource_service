@@ -103,11 +103,19 @@ deploy/mysql         init.sql 建表脚本
   "datasource_key": "order_daily",
   "dims":    ["date", "city"],        // 必须是该数据源 dim_map 里的 key
   "metrics": ["cost", "click"],       // 必须是该数据源 mtx_map 里的 key
-  // 维度过滤 → WHERE（行级）；指标过滤 → HAVING（聚合后）
-  "filters": [
-    {"field": "city", "op": "=", "value": "北京"},
-    {"field": "cost", "op": ">", "value": "1000"}
-  ],
+  // 过滤条件树：分组节点用 and / or 连接，可任意嵌套
+  "filter": {
+    "logic": "and",
+    "children": [
+      {"field": "city", "op": "=", "value": "北京"},
+      {"logic": "or", "children": [
+        {"field": "cost",  "op": ">", "value": "1000"},
+        {"field": "click", "op": "<", "value": "100"}
+      ]}
+    ]
+  },
+  // 也支持扁平写法，等价于「全部 AND」：
+  // "filters": [{"field": "city", "op": "=", "value": "北京"}]
   "order_by":[{"field": "cost", "desc": true}],
   "limit":   1000                      // 服务端 clamp 到 QUERY_MAX_ROWS
 }
@@ -120,10 +128,30 @@ SELECT stat_date AS `date`, city_code AS `city`, sum(stat_cost) AS `cost`
 FROM ( <mid_sql> ) AS __mid
 WHERE city_code = {p0:String}
 GROUP BY stat_date, city_code
-HAVING `cost` > {p1:Float64}
+HAVING (`cost` > {p1:Float64} OR `click` < {p2:Float64})
 ORDER BY `cost` DESC
 LIMIT 1000
 ```
+
+### 过滤条件树：AND / OR 怎么落到 WHERE / HAVING
+
+过滤条件是一棵树：分组节点带 `logic`（`and` / `or`）和 `children`，叶子节点带
+`field` / `op` / `value`（`in` / `not in` 用 `values`）。分组可嵌套，所以
+`A AND (B OR C)` 这种组合表达得出来。
+
+编译成 SQL 时要面对一个现实：**维度条件是行级的（聚合前），指标条件只有聚合后才有值**。
+处理方式：
+
+- **AND 可以拆**：能下压的子条件进 `WHERE`（少聚合很多行），压不下去的进 `HAVING`，
+  两段用 AND 连接后与原意等价。
+- **OR 不能拆**：一旦一部分进 `WHERE`、另一部分进 `HAVING`，两段之间就变成 AND 了，
+  语义完全变了。所以 OR 整组必须能待在同一段里——优先 `WHERE`，不行才 `HAVING`。
+- **已勾选的维度聚合后仍有这一列**，所以可以和指标用 OR 组合（整组进 `HAVING`）。
+- **未勾选的维度只在聚合前有意义**，和指标用 OR 连接是算不出来的，直接返回明确错误：
+  `这组 OR 条件算不出来：其中既有只能在聚合前判断的条件（未勾选的维度），又有只能在聚合后判断的条件（指标）`。
+
+规模上限：嵌套不超过 5 层、节点不超过 64 个（`MaxFilterDepth` / `MaxFilterNodes`）。
+条件树是用户自由构造的递归结构，不给上限的话一个深嵌套就能把组装和解析都拖垮。
 
 约定：`mid_sql` 的输出是**可以被再次聚合的中间结果**，外层按用户选的维度重新聚合，
 指标口径统一、不会重复计算。所以 `mid_sql` 里不要写 `ORDER BY` / `LIMIT`（先截断再聚合，结果会错）。

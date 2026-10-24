@@ -1,5 +1,7 @@
 package query
 
+import "strings"
+
 // 允许的比较操作符白名单。过滤值一律走 ClickHouse 命名参数绑定，
 // 绝不做字符串拼接——这是整个查询功能唯一的注入面，必须堵死。
 const (
@@ -27,13 +29,50 @@ var metricOps = map[string]bool{
 	OpIn: true, OpNotIn: true,
 }
 
+// 条件树的逻辑运算符。
+const (
+	LogicAnd = "and"
+	LogicOr  = "or"
+)
+
 // Filter 单个过滤条件。Value 用于单值比较，Values 用于 in / not in。
+//
+// 保留它是为了向后兼容：扁平的 filters 等价于「全部用 AND 连接」。
+// 需要 AND / OR 组合时请改用 FilterNode。
 type Filter struct {
 	Field  string   `json:"field"`
 	Op     string   `json:"op"`
 	Value  string   `json:"value"`
 	Values []string `json:"values"`
 }
+
+// FilterNode 过滤条件树的一个节点，二选一：
+//
+//   - 分组节点：Logic = and / or + Children
+//   - 叶子节点：Field / Op / Value / Values
+//
+// 分组可以无限嵌套，这样「A AND (B OR C)」这类组合才表达得出来。
+type FilterNode struct {
+	Logic    string       `json:"logic,omitempty"`
+	Children []FilterNode `json:"children,omitempty"`
+
+	Field  string   `json:"field,omitempty"`
+	Op     string   `json:"op,omitempty"`
+	Value  string   `json:"value,omitempty"`
+	Values []string `json:"values,omitempty"`
+}
+
+// IsGroup 判断是否为分组节点。
+func (n FilterNode) IsGroup() bool {
+	return strings.TrimSpace(n.Logic) != ""
+}
+
+// 条件树的规模上限。条件树是用户自由构造的递归结构，
+// 不给上限的话一个深层嵌套就能让 SQL 组装和 ClickHouse 解析都变得很难受。
+const (
+	MaxFilterDepth = 5
+	MaxFilterNodes = 64
+)
 
 // OrderBy 排序项。
 type OrderBy struct {
@@ -44,12 +83,13 @@ type OrderBy struct {
 // ExecuteRequest 是「查询意图」，不是 SQL。
 // 前端只描述想看什么，SQL 完全由后端生成，用户不感知 SQL 的存在。
 type ExecuteRequest struct {
-	DatasourceKey string    `json:"datasource_key"`
-	Dims          []string  `json:"dims"`
-	Metrics       []string  `json:"metrics"`
-	Filters       []Filter  `json:"filters"`
-	OrderBy       []OrderBy `json:"order_by"`
-	Limit         int       `json:"limit"`
+	DatasourceKey string      `json:"datasource_key"`
+	Dims          []string    `json:"dims"`
+	Metrics       []string    `json:"metrics"`
+	Filters       []Filter    `json:"filters"`
+	Filter        *FilterNode `json:"filter"`
+	OrderBy       []OrderBy   `json:"order_by"`
+	Limit         int         `json:"limit"`
 }
 
 // Column 结果列元信息。

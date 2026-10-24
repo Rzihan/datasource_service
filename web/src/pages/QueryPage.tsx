@@ -3,7 +3,8 @@ import { App, Alert, Card, Col, Row, Spin } from 'antd';
 import QueryBuilder from '../components/QueryBuilder';
 import ResultView from '../components/ResultView';
 import { executeQuery, fetchDimValues, fetchList } from '../api';
-import type { DatasourceConfig, Filter, OrderBy, QueryResult } from '../types';
+import type { DatasourceConfig, FilterNode, OrderBy, QueryResult } from '../types';
+import { emptyRoot, pruneEmpty } from '../utils/filterTree';
 
 const MAX_DATASOURCES = 200;
 
@@ -14,7 +15,7 @@ export default function QueryPage() {
   const [selectedKey, setSelectedKey] = useState<string>('');
   const [dims, setDims] = useState<string[]>([]);
   const [metrics, setMetrics] = useState<string[]>([]);
-  const [filters, setFilters] = useState<Filter[]>([]);
+  const [filterTree, setFilterTree] = useState<FilterNode>(emptyRoot());
   const [orderBy, setOrderBy] = useState<OrderBy | null>(null);
   const [limit, setLimit] = useState(1000);
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -49,7 +50,7 @@ export default function QueryPage() {
     setSelectedKey(key);
     setDims([]);
     setMetrics([]);
-    setFilters([]);
+    setFilterTree(emptyRoot());
     setOrderBy(null);
     setResult(null);
     setError('');
@@ -80,14 +81,13 @@ export default function QueryPage() {
     setQuerying(true);
     setError('');
     try {
+      // 空值的条件不提交，避免后端报无意义的错
+      const pruned = pruneEmpty(filterTree);
       const res = await executeQuery({
         datasource_key: selectedKey,
         dims,
         metrics,
-        // 空值的过滤条件不提交，避免后端报无意义的错
-        filters: filters.filter((f) =>
-          f.op === 'in' || f.op === 'not in' ? (f.values?.length ?? 0) > 0 : (f.value ?? '').trim() !== '',
-        ),
+        filter: pruned ?? undefined,
         order_by: orderBy ? [orderBy] : [],
         limit,
       });
@@ -115,8 +115,8 @@ export default function QueryPage() {
               metrics={metrics}
               onDimsChange={setDims}
               onMetricsChange={setMetrics}
-              filters={filters}
-              onFiltersChange={setFilters}
+              filterTree={filterTree}
+              onFilterTreeChange={setFilterTree}
               orderBy={orderBy}
               onOrderByChange={setOrderBy}
               limit={limit}

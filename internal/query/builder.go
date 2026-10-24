@@ -19,11 +19,14 @@ type Spec struct {
 	MtxMap        map[string]string
 	Dims          []string
 	Metrics       []string
-	Filters       []Filter
-	OrderBy       []OrderBy
-	Limit         int
-	MaxLimit      int
-	DefaultLimit  int
+	// Filters 是兼容字段：扁平列表，等价于「全部用 AND 连接」。
+	// Filter 是条件树，支持 AND / OR 任意嵌套；两者同时给时以 Filter 为准。
+	Filters      []Filter
+	Filter       *FilterNode
+	OrderBy      []OrderBy
+	Limit        int
+	MaxLimit     int
+	DefaultLimit int
 }
 
 // Param 是 SQL 的命名参数，由引擎层转成驱动的参数绑定。
@@ -69,69 +72,22 @@ func Build(spec Spec) (string, []Param, error) {
 		selectParts = append(selectParts, fmt.Sprintf("%s AS %s", expr, quote(mtx)))
 	}
 
-	// 过滤可以作用在维度（WHERE）或指标（HAVING）上：
-	// 维度是行级过滤，指标是聚合后的过滤，语义不同必须分开。
+	// 过滤条件编译成 WHERE / HAVING 两段，见 compileFilter 的说明。
+	b := &filterCompiler{spec: spec}
 	var whereParts, havingParts []string
-	var params []Param
-	for i, f := range spec.Filters {
-		dimExpr, isDim := spec.DimMap[f.Field]
-		// 指标不需要表达式：校验通过后 HAVING 直接引用别名
-		_, isMtx := spec.MtxMap[f.Field]
-		var expr string
-		var isMetric bool
-		switch {
-		case isDim:
-			expr = dimExpr
-		case isMtx:
-			isMetric = true
-			// 指标必须已被勾选才允许过滤：没勾选的指标不会出现在结果里，
-			// 拿它做过滤条件，用户看不到任何依据，语义上说不通。
-			if !contains(spec.Metrics, f.Field) {
-				return "", nil, fmt.Errorf("%w: 过滤指标 %q 未被勾选，只有已选择的指标才能用于过滤", ErrInvalidQuery, f.Field)
-			}
-			// HAVING 必须引用 SELECT 的别名，不能重复写聚合表达式：
-			// ClickHouse 会把 SELECT 的别名带进 HAVING，当指标 key 与表达式里的列名
-			// 同名时（例如 click -> sum(clicks) 且别名也叫 click），
-			// sum(clicks) 会被解析成对聚合结果再聚合，直接报
-			// "Aggregate function is found inside another aggregate function"。
-			expr = quote(f.Field)
-		default:
-			return "", nil, fmt.Errorf("%w: 过滤字段 %q 不在该数据源的 dim_map / mtx_map 中", ErrInvalidQuery, f.Field)
+	if root := spec.rootFilter(); root != nil {
+		c, err := b.compile(*root, 1)
+		if err != nil {
+			return "", nil, err
 		}
-
-		op := strings.ToLower(strings.TrimSpace(f.Op))
-		if !allowedOps[op] {
-			return "", nil, fmt.Errorf("%w: 不支持的操作符 %q", ErrInvalidQuery, f.Op)
+		if c.where != "" {
+			whereParts = append(whereParts, c.where)
 		}
-		if isMetric && !metricOps[op] {
-			return "", nil, fmt.Errorf("%w: 指标过滤不支持操作符 %q，请使用 = != > >= < <= in not in", ErrInvalidQuery, op)
+		if c.having != "" {
+			havingParts = append(havingParts, c.having)
 		}
-
-		name := fmt.Sprintf("p%d", i)
-		addPart := func(part string) {
-			if isMetric {
-				havingParts = append(havingParts, part)
-			} else {
-				whereParts = append(whereParts, part)
-			}
-		}
-
-		if op == OpIn || op == OpNotIn {
-			if len(f.Values) == 0 {
-				return "", nil, fmt.Errorf("%w: %s 操作需要提供 values", ErrInvalidQuery, op)
-			}
-			typ, val := arrayParam(isMetric, f.Values)
-			addPart(fmt.Sprintf("%s %s ({%s:%s})", expr, op, name, typ))
-			params = append(params, Param{Name: name, Value: val})
-			continue
-		}
-		if strings.TrimSpace(f.Value) == "" {
-			return "", nil, fmt.Errorf("%w: 过滤字段 %q 的值为空", ErrInvalidQuery, f.Field)
-		}
-		typ, val := scalarParam(isMetric, f.Value)
-		addPart(fmt.Sprintf("%s %s {%s:%s}", expr, op, name, typ))
-		params = append(params, Param{Name: name, Value: val})
 	}
+	params := b.params
 
 	// 排序字段必须是已选中的维度或指标，否则无法在 SELECT 里找到对应列。
 	var orderParts []string
@@ -184,6 +140,217 @@ func Build(spec Spec) (string, []Param, error) {
 	}
 	sb.WriteString(fmt.Sprintf("\nLIMIT %d", limit))
 	return sb.String(), params, nil
+}
+
+// rootFilter 取条件树：优先用 Filter（支持 AND / OR 嵌套），
+// 否则把扁平的 Filters 包成一个 AND 分组。
+func (s Spec) rootFilter() *FilterNode {
+	if s.Filter != nil {
+		return s.Filter
+	}
+	if len(s.Filters) == 0 {
+		return nil
+	}
+	children := make([]FilterNode, 0, len(s.Filters))
+	for _, f := range s.Filters {
+		children = append(children, FilterNode{Field: f.Field, Op: f.Op, Value: f.Value, Values: f.Values})
+	}
+	return &FilterNode{Logic: LogicAnd, Children: children}
+}
+
+// cond 是一个条件（或一组条件）编译后的两种形态：
+//
+//   - where：可以在聚合前判断，能大幅减少参与聚合的行数，优先使用
+//   - having：只能在聚合后判断（指标条件必然如此）
+//
+// 两者都可能为空，也可能同时有值（见 AND 节点的拆分）。
+type cond struct {
+	where  string
+	having string
+}
+
+// filterCompiler 递归编译条件树，顺带收集参数。
+type filterCompiler struct {
+	spec      Spec
+	params    []Param
+	paramSeq  int
+	nodeCount int
+}
+
+// compile 把条件树编译成 WHERE / HAVING 两段。
+//
+// 为什么要拆两段：维度条件是行级的，聚合前就能筛掉大量数据；
+// 指标只有聚合后才有值。所以能下压的尽量下压，压不下去的才进 HAVING。
+//
+// 遇到 AND / OR 混用时，有些组合是算不出来的，例如
+// 「渠道 = 抖音 OR 消耗 > 1000」：渠道没被勾选为维度，聚合后根本没有这一列，
+// 只能在聚合前筛；而消耗只有聚合后才有值。二者无法用 OR 连接。
+// 这种情况返回明确的中文错误，而不是生成一条语义不明的 SQL。
+func (b *filterCompiler) compile(node FilterNode, depth int) (cond, error) {
+	if depth > MaxFilterDepth {
+		return cond{}, fmt.Errorf("%w: 过滤条件嵌套超过 %d 层", ErrInvalidQuery, MaxFilterDepth)
+	}
+	b.nodeCount++
+	if b.nodeCount > MaxFilterNodes {
+		return cond{}, fmt.Errorf("%w: 过滤条件超过 %d 个", ErrInvalidQuery, MaxFilterNodes)
+	}
+
+	if !node.IsGroup() {
+		return b.compileLeaf(node)
+	}
+
+	logic := strings.ToLower(strings.TrimSpace(node.Logic))
+	if logic != LogicAnd && logic != LogicOr {
+		return cond{}, fmt.Errorf("%w: 不支持的逻辑运算符 %q，只能用 and / or", ErrInvalidQuery, node.Logic)
+	}
+	if len(node.Children) == 0 {
+		return cond{}, fmt.Errorf("%w: %s 分组下至少需要一个条件", ErrInvalidQuery, logic)
+	}
+
+	subs := make([]cond, 0, len(node.Children))
+	for _, c := range node.Children {
+		sc, err := b.compile(c, depth+1)
+		if err != nil {
+			return cond{}, err
+		}
+		subs = append(subs, sc)
+	}
+
+	// OR 整组必须待在同一段里：一旦一部分下压到 WHERE、另一部分留在 HAVING，
+	// 两段之间就变成了 AND，语义完全变了。
+	if logic == LogicOr {
+		if ws, ok := collectAll(subs, func(c cond) string { return c.where }); ok {
+			return cond{where: joinCond(ws, LogicOr)}, nil
+		}
+		if hs, ok := collectAll(subs, func(c cond) string { return c.having }); ok {
+			return cond{having: joinCond(hs, LogicOr)}, nil
+		}
+		return cond{}, fmt.Errorf("%w: 这组 OR 条件算不出来：其中既有只能在聚合前判断的条件（未勾选的维度），又有只能在聚合后判断的条件（指标），二者不能用 OR 连接", ErrInvalidQuery)
+	}
+
+	// AND 可以拆：能下压的进 WHERE，压不下去的进 HAVING，两段用 AND 连接后等价。
+	var ws, hs []string
+	for _, c := range subs {
+		switch {
+		case c.where != "":
+			ws = append(ws, c.where)
+		case c.having != "":
+			hs = append(hs, c.having)
+		default:
+			return cond{}, fmt.Errorf("%w: 这组 AND 条件算不出来：其中一个条件既不能下压到聚合前、也无法在聚合后判断", ErrInvalidQuery)
+		}
+	}
+	out := cond{}
+	if len(ws) > 0 {
+		out.where = joinCond(ws, LogicAnd)
+	}
+	if len(hs) > 0 {
+		out.having = joinCond(hs, LogicAnd)
+	}
+	return out, nil
+}
+
+// compileLeaf 编译单个条件。
+func (b *filterCompiler) compileLeaf(node FilterNode) (cond, error) {
+	if strings.TrimSpace(node.Field) == "" {
+		return cond{}, fmt.Errorf("%w: 过滤条件缺少 field", ErrInvalidQuery)
+	}
+	op := strings.ToLower(strings.TrimSpace(node.Op))
+	if !allowedOps[op] {
+		return cond{}, fmt.Errorf("%w: 不支持的操作符 %q", ErrInvalidQuery, node.Op)
+	}
+
+	// 维度是行级条件，永远可以下压到 WHERE；若它同时被选为分组键，
+	// 聚合后这一列还在，所以再给一份 HAVING 形态备用。
+	if dimExpr, ok := b.spec.DimMap[node.Field]; ok {
+		ph, err := b.bind(op, false, node)
+		if err != nil {
+			return cond{}, err
+		}
+		c := cond{where: fmt.Sprintf("%s %s %s", dimExpr, op, ph)}
+		if contains(b.spec.Dims, node.Field) {
+			c.having = fmt.Sprintf("%s %s %s", quote(node.Field), op, ph)
+		}
+		return c, nil
+	}
+
+	// 指标只有聚合后才有值，只能进 HAVING。
+	if _, ok := b.spec.MtxMap[node.Field]; ok {
+		if !contains(b.spec.Metrics, node.Field) {
+			return cond{}, fmt.Errorf("%w: 过滤指标 %q 未被勾选，只有已选择的指标才能用于过滤", ErrInvalidQuery, node.Field)
+		}
+		if !metricOps[op] {
+			return cond{}, fmt.Errorf("%w: 指标过滤不支持操作符 %q，请使用 = != > >= < <= in not in", ErrInvalidQuery, op)
+		}
+		ph, err := b.bind(op, true, node)
+		if err != nil {
+			return cond{}, err
+		}
+		// 引用别名而不是重复写聚合表达式：ClickHouse 会把 SELECT 的别名带进 HAVING，
+		// 指标 key 与表达式列名同名时 sum(clicks) 会被解析成 sum(sum(clicks))。
+		return cond{having: fmt.Sprintf("%s %s %s", quote(node.Field), op, ph)}, nil
+	}
+
+	return cond{}, fmt.Errorf("%w: 过滤字段 %q 不在该数据源的 dim_map / mtx_map 中", ErrInvalidQuery, node.Field)
+}
+
+// bind 生成命名参数占位符并登记参数值。
+func (b *filterCompiler) bind(op string, isMetric bool, node FilterNode) (string, error) {
+	name := fmt.Sprintf("p%d", b.paramSeq)
+	b.paramSeq++
+
+	if op == OpIn || op == OpNotIn {
+		if len(node.Values) == 0 {
+			return "", fmt.Errorf("%w: 过滤字段 %q 的 %s 操作需要提供 values", ErrInvalidQuery, node.Field, op)
+		}
+		typ, val := arrayParam(isMetric, node.Values)
+		b.params = append(b.params, Param{Name: name, Value: val})
+		// in / not in 的值列表需要元组括号：expr in ({p0:Array(String)})
+		return fmt.Sprintf("({%s:%s})", name, typ), nil
+	}
+	if strings.TrimSpace(node.Value) == "" {
+		return "", fmt.Errorf("%w: 过滤字段 %q 的值为空", ErrInvalidQuery, node.Field)
+	}
+	typ, val := scalarParam(isMetric, node.Value)
+	b.params = append(b.params, Param{Name: name, Value: val})
+	return fmt.Sprintf("{%s:%s}", name, typ), nil
+}
+
+// joinCond 用逻辑运算符连接多个条件，单个条件时不加多余的括号。
+func joinCond(parts []string, logic string) string {
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	sep := " AND "
+	if logic == LogicOr {
+		sep = " OR "
+	}
+	return "(" + strings.Join(parts, sep) + ")"
+}
+
+// collectAll 取出每个子结果的指定形态，只要有任何一个缺失就返回 false。
+func collectAll(subs []cond, pick func(cond) string) ([]string, bool) {
+	out := make([]string, 0, len(subs))
+	for _, c := range subs {
+		v := pick(c)
+		if v == "" {
+			return nil, false
+		}
+		out = append(out, v)
+	}
+	return out, true
+}
+
+// FilterNodeCount 统计条件树的节点总数（日志用）。
+func FilterNodeCount(n *FilterNode) int {
+	if n == nil {
+		return 0
+	}
+	total := 1
+	for i := range n.Children {
+		total += FilterNodeCount(&n.Children[i])
+	}
+	return total
 }
 
 // BuildDimValuesSQL 生成「某维度的候选值」查询，供前端下拉枚举使用。

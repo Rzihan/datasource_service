@@ -1,6 +1,8 @@
-import { App, Alert, Button, Input, InputNumber, Select, Space, Typography } from 'antd';
-import { DeleteOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
-import type { DatasourceConfig, Filter, OrderBy } from '../types';
+import { App, Alert, Button, InputNumber, Select, Space, Typography } from 'antd';
+import { ClearOutlined, SearchOutlined } from '@ant-design/icons';
+import type { DatasourceConfig, FilterNode, OrderBy } from '../types';
+import FilterTreeEditor from './FilterTreeEditor';
+import { countLeaves, emptyRoot, removeFields } from '../utils/filterTree';
 
 interface Props {
   datasources: DatasourceConfig[];
@@ -10,8 +12,8 @@ interface Props {
   metrics: string[];
   onDimsChange: (dims: string[]) => void;
   onMetricsChange: (metrics: string[]) => void;
-  filters: Filter[];
-  onFiltersChange: (filters: Filter[]) => void;
+  filterTree: FilterNode;
+  onFilterTreeChange: (tree: FilterNode) => void;
   orderBy: OrderBy | null;
   onOrderByChange: (order: OrderBy | null) => void;
   limit: number;
@@ -23,16 +25,11 @@ interface Props {
   loading: boolean;
 }
 
-const OPS = ['=', '!=', '>', '>=', '<', '<=', 'like', 'in', 'not in'];
-// 指标是聚合出来的数值，模糊匹配没有语义，后端也会直接拒绝
-const METRIC_OPS = ['=', '!=', '>', '>=', '<', '<=', 'in', 'not in'];
-const MULTI_VALUE_OPS = ['in', 'not in'];
-
 export default function QueryBuilder(props: Props) {
   const {
     datasources, selected, onSelectDatasource,
     dims, metrics, onDimsChange, onMetricsChange,
-    filters, onFiltersChange,
+    filterTree, onFilterTreeChange,
     orderBy, onOrderByChange,
     limit, onLimitChange,
     dimValues, dimValueLoading, onRequestDimValues,
@@ -52,36 +49,22 @@ export default function QueryBuilder(props: Props) {
   // 拿它做过滤条件用户看不到依据，语义上也说不通。
   const filterableMetrics = mtxOptions.filter((k) => metrics.includes(k));
 
-  const updateFilter = (index: number, patch: Partial<Filter>) => {
-    const next = filters.map((f, i) => (i === index ? { ...f, ...patch } : f));
-    onFiltersChange(next);
-  };
-
-  // 过滤字段下拉：维度走 WHERE、指标走 HAVING，分组展示避免混淆
-  const filterFieldOptions = [
-    { label: '维度（行级过滤）', options: dimOptions.map((k) => ({ value: k, label: optionLabel(k) })) },
-    { label: '指标（聚合后过滤）', options: filterableMetrics.map((k) => ({ value: k, label: optionLabel(k) })) },
-  ].filter((g) => g.options.length > 0);
-
-  const isMetricField = (field: string) => mtxOptions.includes(field);
-
   // 取消勾选指标时，挂在该指标上的过滤条件必须一起清掉，否则会提交一个
   // 用户看不懂的查询。清除前先弹确认，说明要动哪些东西。
   const handleMetricsChange = (next: string[]) => {
     const removed = metrics.filter((m) => !next.includes(m));
-    const affectedFilters = filters.filter((f) => removed.includes(f.field));
+    const collected: string[] = [];
+    const nextTree = removeFields(filterTree, removed, collected);
     const affectedSort = orderBy && removed.includes(orderBy.field) ? orderBy.field : '';
-    if (affectedFilters.length === 0 && !affectedSort) {
+    if (collected.length === 0 && !affectedSort) {
       onMetricsChange(next);
       return;
     }
 
     const parts: string[] = [];
-    if (affectedFilters.length > 0) {
-      const names = [...new Set(affectedFilters.map((f) => f.field))]
-        .map((m) => `「${optionLabel(m)}」`)
-        .join('、');
-      parts.push(`指标 ${names} 上的 ${affectedFilters.length} 个过滤条件会被清除`);
+    if (collected.length > 0) {
+      const names = [...new Set(collected)].map((m) => `「${optionLabel(m)}」`).join('、');
+      parts.push(`指标 ${names} 上的 ${collected.length} 个过滤条件会被清除`);
     }
     if (affectedSort) {
       parts.push(`排序字段「${optionLabel(affectedSort)}」已失效，会被清空`);
@@ -94,21 +77,15 @@ export default function QueryBuilder(props: Props) {
       cancelText: '放弃',
       onOk: () => {
         onMetricsChange(next);
-        if (affectedFilters.length > 0) {
-          onFiltersChange(filters.filter((f) => !removed.includes(f.field)));
+        if (collected.length > 0) {
+          onFilterTreeChange(nextTree ?? emptyRoot());
         }
         if (affectedSort) onOrderByChange(null);
       },
     });
   };
 
-  const addFilter = () => {
-    const field = dimOptions[0] ?? filterableMetrics[0] ?? '';
-    const next = [...filters, { field, op: isMetricField(field) ? '>' : '=', value: '' }];
-    onFiltersChange(next);
-    // 指标没有候选值（不查 distinct），只有维度才去拉
-    if (field && !isMetricField(field)) onRequestDimValues(field);
-  };
+  const leafCount = countLeaves(filterTree);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -161,92 +138,32 @@ export default function QueryBuilder(props: Props) {
       <div>
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            过滤条件
+            过滤条件{leafCount > 0 ? `（${leafCount} 个）` : ''}
           </Typography.Text>
-          <Button
-            type="link"
-            size="small"
-            icon={<PlusOutlined />}
-            disabled={!selected || (dimOptions.length === 0 && filterableMetrics.length === 0)}
-            onClick={addFilter}
-          >
-            添加
-          </Button>
+          {leafCount > 0 && (
+            <Button
+              type="link"
+              size="small"
+              icon={<ClearOutlined />}
+              onClick={() => onFilterTreeChange(emptyRoot())}
+            >
+              清空
+            </Button>
+          )}
         </Space>
-        {filters.length === 0 && (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            无
-          </Typography.Text>
-        )}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-          {filters.map((f, i) => {
-            const multi = MULTI_VALUE_OPS.includes(f.op);
-            const values = dimValues[f.field] ?? [];
-            // 指标是聚合结果，后端会做数值比较：不给 like，且值只能手输
-            const metric = isMetricField(f.field);
-            const ops = metric ? METRIC_OPS : OPS;
-            return (
-              <Space.Compact key={i} style={{ width: '100%' }}>
-                <Select
-                  style={{ width: '32%' }}
-                  value={f.field}
-                  options={filterFieldOptions}
-                  onChange={(v) => {
-                    const toMetric = isMetricField(v);
-                    updateFilter(i, {
-                      field: v,
-                      // 从维度切到指标时，若当前是 like 则要换掉，否则后端会拒绝
-                      op: toMetric && !METRIC_OPS.includes(f.op) ? '>' : f.op,
-                      value: '',
-                      values: [],
-                    });
-                    if (!toMetric) onRequestDimValues(v);
-                  }}
-                />
-                <Select
-                  style={{ width: '22%' }}
-                  value={f.op}
-                  options={ops.map((o) => ({ value: o, label: o }))}
-                  onChange={(v) =>
-                    updateFilter(i, { op: v, value: multi ? '' : f.value, values: multi ? f.values ?? [] : [] })
-                  }
-                />
-                {multi ? (
-                  <Select
-                    mode={metric ? 'tags' : 'multiple'}
-                    style={{ width: '38%' }}
-                    placeholder={metric ? '输入数值后回车' : '选择值'}
-                    tokenSeparators={metric ? [','] : undefined}
-                    loading={!metric && dimValueLoading[f.field]}
-                    value={f.values ?? []}
-                    onChange={(v) => updateFilter(i, { values: v })}
-                    options={values.map((v) => ({ value: v, label: v }))}
-                  />
-                ) : values.length > 0 && !metric ? (
-                  <Select
-                    showSearch
-                    style={{ width: '38%' }}
-                    placeholder="选择或输入值"
-                    loading={dimValueLoading[f.field]}
-                    value={f.value || undefined}
-                    onChange={(v) => updateFilter(i, { value: v })}
-                    options={values.map((v) => ({ value: v, label: v }))}
-                  />
-                ) : (
-                  <Input
-                    style={{ width: '38%' }}
-                    placeholder={metric ? '数值' : '值'}
-                    value={f.value}
-                    onChange={(e) => updateFilter(i, { value: e.target.value })}
-                  />
-                )}
-                <Button
-                  icon={<DeleteOutlined />}
-                  onClick={() => onFiltersChange(filters.filter((_, idx) => idx !== i))}
-                />
-              </Space.Compact>
-            );
-          })}
+        <div style={{ marginTop: 4 }}>
+          <FilterTreeEditor
+            node={filterTree}
+            onChange={onFilterTreeChange}
+            depth={1}
+            dimOptions={dimOptions}
+            metricOptions={filterableMetrics}
+            isMetricField={(field) => mtxOptions.includes(field)}
+            optionLabel={optionLabel}
+            dimValues={dimValues}
+            dimValueLoading={dimValueLoading}
+            onRequestDimValues={onRequestDimValues}
+          />
         </div>
       </div>
 
