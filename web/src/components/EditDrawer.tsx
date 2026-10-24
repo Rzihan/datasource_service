@@ -237,8 +237,32 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
             <Space>
               <span>mid_sql</span>
               <Typography.Text type="secondary">
-                纯文本存储，不做语法校验 · {midSQL.length} 字符 / {new Blob([midSQL]).size} 字节
+                支持 Go template，不做语法校验 · {midSQL.length} 字符 /{' '}
+                {new Blob([midSQL]).size} 字节
               </Typography.Text>
+            </Space>
+          }
+          extra={
+            <Space direction="vertical" size={2}>
+              <span>
+                中间结果 SQL：输出应可被再次聚合，所以不要写 ORDER BY / LIMIT。
+                不含 {'{{'} 时按纯 SQL 处理，与以前完全一样。
+              </span>
+              <span>
+                可用变量 <Typography.Text code>.Dims .Metrics .Fields .Filters</Typography.Text>
+                ，判断方法{' '}
+                <Typography.Text code>
+                  {'.Has .HasAny .HasAll .HasDim .HasMetric'}
+                </Typography.Text>
+                。用不到的维表 JOIN 可以在模板里省掉，例：
+              </span>
+              <Typography.Text code>
+                {'{{ if .HasAny "city_name" "city_tier" }} left join dim_city c on ... {{ end }}'}
+              </Typography.Text>
+              <span>
+                注意：裁掉 JOIN 的正确性由配置者保证——只有确认是 LEFT JOIN 且关联键在右表唯一
+                （不会放大行数）时才可裁，否则聚合结果会偏小。
+              </span>
             </Space>
           }
           required

@@ -259,6 +259,70 @@ LIMIT 1000
 **维度过滤与指标过滤**：过滤条件树的叶子 `field` 可以是 `dim_map` 的键，也可以是 `mtx_map` 的键。
 前者落到 `WHERE`（先筛行再聚合），后者落到 `HAVING`（先聚合再筛结果），两者语义不同，必须分开。
 
+### mid_sql 模板：按查询裁剪 JOIN
+
+`mid_sql` 支持 **Go text/template**。典型用途：一次查询用不到某张维表的字段时，
+整个 `LEFT JOIN` 就不必丢给 ClickHouse。
+
+> 实测（1000 万行事实表 × 1000 行维表）：只查消耗时，裁掉用不到的 LEFT JOIN
+> 耗时从 31ms 降到 11ms。**收益在 CPU 不在 IO** —— JOIN 的代价是每行探测一次 hash，
+> 读取行数几乎不变。维表越大、事实表行数越多，收益越大。
+> （反过来，把 WHERE 条件下推进 `mid_sql` 是**没有收益**的：ClickHouse 优化器自己就会做，
+> 实测读取行数一模一样。）
+
+可用变量：
+
+| 变量 | 内容 |
+| --- | --- |
+| `.Dims` / `.Metrics` | 选中的维度名 / 指标名，保持选择顺序 |
+| `.Fields` | 本次用到的全部字段（维度 + 指标 + 过滤字段 + 行级权限列），去重排序 |
+| `.Filters` | 过滤条件引用到的字段，去重排序 |
+
+判断方法（`{{ if .HasAny "a" "b" }} ... {{ end }}`）：
+
+| 方法 | 含义 |
+| --- | --- |
+| `.Has "a"` | 用到某个字段 |
+| `.HasAny "a" "b"` | 用到其中任意一个（不传参数 = false，保守不裁剪） |
+| `.HasAll "a" "b"` | 全部都用到（不传参数 = true） |
+| `.HasDim` / `.HasMetric` | 只在维度 / 指标范围内判断 |
+
+也提供等价的函数形式 `hasAny . "a"` 或 `hasAny .Fields "a"`；模板内置的
+`and` / `or` / `not` 可直接用来组合条件。
+
+示例（三张维表，各自的保留条件不同）：
+
+```sql
+select
+  f.stat_date as stat_date,
+  f.stat_cost as stat_cost
+  {{ if .HasAny "city_name" "city_tier" }}
+  , c.city_name as city_name, c.city_tier as city_tier
+  {{ end }}
+  {{ if .Has "shop_name" }}
+  , s.shop_name as shop_name
+  {{ end }}
+from demo.t_order_dtl f
+{{ if .HasAny "city_name" "city_tier" }}
+  left join dim_city c on f.city_code = c.city_code
+{{ end }}
+{{ if .HasAll "brand_name" "shop_name" }}
+  -- 品牌维表借道店铺维表，两个都在时才 join
+  left join dim_brand b on s.brand_id = b.brand_id
+{{ end }}
+```
+
+**安全与正确性**：
+
+1. 模板能引用到的只有 `dim_map` / `mtx_map` 的键（已过白名单校验）；过滤的取值
+   一律走参数绑定，永远不进模板文本。所以模板只能改变标识符与 SQL 片段。
+2. **裁掉 JOIN 的正确性由配置者声明**。系统无法校验「关联键在右表是否唯一」——
+   不唯一时 LEFT JOIN 会放大行数，裁掉后 `sum` 会偏小；INNER JOIN 更危险（它本身在过滤行）。
+3. 不含 `{{` 的配置按纯 SQL 处理，零开销，存量配置行为不变。
+4. 渲染失败一律返回 400 并带上原因，**不回退**到不裁剪的写法——悄悄换 SQL 会让口径变化。
+5. 渲染结果有 1 MiB 上限（防 `range` 写错撑爆），模板解析结果按内容哈希缓存（上限 256 条）。
+6. 行级权限用到的列也参与 `.Fields`，否则模板可能裁掉权限条件依赖的 JOIN。
+
 ### 结果区：表格与图表
 
 结果页两个 tab，共用同一份返回结果，图表侧全部是前端加工，不再请求后端：

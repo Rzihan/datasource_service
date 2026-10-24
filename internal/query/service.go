@@ -157,9 +157,26 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 		return nil, err
 	}
 
+	// mid_sql 可能是模板：按本次用到的字段决定保留哪些 JOIN。
+	// 行级权限用到的列也要算进来，否则模板可能裁掉权限条件依赖的 JOIN。
+	rfSpec := RowFilterSpec{
+		TenantColumn: ds.ACL.RowFilter.Tenant.Column,
+		UserColumn:   ds.ACL.RowFilter.User.Column,
+	}
+	filterFields := FilterNodeFields(req.Filter)
+	midSQL, err := RenderMidSQL(ds.MidSQL, MidSQLData{
+		Dims:    req.Dims,
+		Metrics: req.Metrics,
+		Fields:  buildFields(req.Dims, req.Metrics, filterFields, rowFilterColumns(rfSpec)),
+		Filters: dedupSorted(filterFields),
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	sqlText, params, err := Build(Spec{
 		DatasourceKey: ds.DatasourceKey,
-		MidSQL:        ds.MidSQL,
+		MidSQL:        midSQL,
 		DimMap:        ds.DimMap,
 		MtxMap:        ds.MtxMap,
 		Dims:          req.Dims,
@@ -230,7 +247,19 @@ func (s *Service) DimValues(ctx context.Context, datasourceKey, field string, te
 		return nil, fmt.Errorf("%w: 字段 %q 不是该数据源的维度", ErrInvalidQuery, field)
 	}
 
-	sqlText, params := BuildDimValuesSQL(ds.MidSQL, expr, s.cfg.DimValueLimit, buildRowFilters(ds, tenants, users))
+	// 候选值查询只用到一个维度列，但行级权限的列也要参与渲染判断
+	rfSpec := RowFilterSpec{
+		TenantColumn: ds.ACL.RowFilter.Tenant.Column,
+		UserColumn:   ds.ACL.RowFilter.User.Column,
+	}
+	midSQL, err := RenderMidSQL(ds.MidSQL, MidSQLData{
+		Dims:   []string{field},
+		Fields: buildFields([]string{field}, nil, nil, rowFilterColumns(rfSpec)),
+	})
+	if err != nil {
+		return nil, err
+	}
+	sqlText, params := BuildDimValuesSQL(midSQL, expr, s.cfg.DimValueLimit, buildRowFilters(ds, tenants, users))
 
 	select {
 	case s.sem <- struct{}{}:
