@@ -11,11 +11,13 @@ import type {
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 20000 });
 
-// 系统不接鉴权：操作人来自本地填写的用户名，租户来自本地选择的租户列表，
-// 两者都随请求头带给后端，分别用于审计与数据源级可见性判断。
+// 系统不接鉴权：操作人来自本地填写的用户名，租户 / 可见用户来自本地选择的列表，
+// 三者都随请求头带给后端，分别用于审计、数据源级可见性与行级过滤。
+// 注意这几个头由服务端读取，客户端传什么就按什么过滤——真实环境必须由网关覆盖。
 http.interceptors.request.use((config) => {
   config.headers['X-User'] = localStorage.getItem('ds_operator') || 'system';
   config.headers['X-Tenants'] = localStorage.getItem('ds_tenants') || '';
+  config.headers['X-Visible-Users'] = localStorage.getItem('ds_visible_users') || '';
   return config;
 });
 

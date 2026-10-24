@@ -24,6 +24,24 @@ const (
 type ACL struct {
 	Tenants    []string            `json:"tenants,omitempty"`
 	ColTenants map[string][]string `json:"col_tenants,omitempty"`
+	RowFilter  RowFilter           `json:"row_filter"`
+}
+
+// RowFilter 行级权限过滤。两类规则各自独立开关：
+//   - Tenant：把当前登录态的租户列表挂在指定列上
+//   - User：把当前登录态的可见用户列表挂在指定列上
+//
+// 条件由服务端合成后追加到 WHERE（聚合前），客户端无法绕过。
+// 开启但登录态对应列表为空时，语义是「一行都不匹配」——权限配置宁可拒，不可放。
+type RowFilter struct {
+	Tenant RowRule `json:"tenant"`
+	User   RowRule `json:"user"`
+}
+
+// RowRule 单条行级规则。Column 是 dim_map 的键，由服务端换成真正的列表达式。
+type RowRule struct {
+	Enabled bool   `json:"enabled"`
+	Column  string `json:"column,omitempty"`
 }
 
 // Allows 判断给定的登录态租户能否看到该数据源。

@@ -36,6 +36,7 @@ func New(d Deps) *gin.Engine {
 	r.Use(middleware.RequestID(d.Config.RequestIDHdr))
 	r.Use(middleware.Operator("X-User"))
 	r.Use(middleware.Tenants("X-Tenants"))
+	r.Use(middleware.VisibleUsers("X-Visible-Users"))
 	r.Use(middleware.Logger())
 	r.Use(middleware.CORS())
 

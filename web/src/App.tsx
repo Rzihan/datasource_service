@@ -4,7 +4,7 @@ import { App as AntApp, Input, Layout, Menu, Select, Space, Typography } from 'a
 import { AppstoreOutlined, BarChartOutlined } from '@ant-design/icons';
 import DatasourceList from './pages/DatasourceList';
 import QueryPage from './pages/QueryPage';
-import { readTenants, writeTenants } from './tenants';
+import { readTenants, readVisibleUsers, writeTenants, writeVisibleUsers } from './identity';
 
 const OPERATOR_KEY = 'ds_operator';
 
@@ -19,6 +19,7 @@ export default function App() {
   const location = useLocation();
   const [operator, setOperator] = useState(() => localStorage.getItem(OPERATOR_KEY) || 'system');
   const [tenants, setTenants] = useState<string[]>(readTenants);
+  const [visibleUsers, setVisibleUsers] = useState<string[]>(readVisibleUsers);
 
   // 系统不接鉴权，操作人由使用者自报并存在本地，随请求头 X-User 带给后端审计。
   const onOperatorChange = (value: string) => {
@@ -32,6 +33,13 @@ export default function App() {
   const onTenantsChange = (value: string[]) => {
     setTenants(value);
     writeTenants(value);
+  };
+
+  // 登录态可见用户可以多选，用于行级过滤的 user 规则。
+  // 留空时，开了该规则的数据源按 fail-closed 处理：查不到任何行。
+  const onVisibleUsersChange = (value: string[]) => {
+    setVisibleUsers(value);
+    writeVisibleUsers(value);
   };
 
   return (
@@ -57,6 +65,17 @@ export default function App() {
             value={tenants}
             onChange={onTenantsChange}
             placeholder="留空=不指定租户"
+            tokenSeparators={[',']}
+            maxTagCount={3}
+          />
+          <Typography.Text type="secondary">可见用户</Typography.Text>
+          <Select
+            mode="tags"
+            size="small"
+            style={{ minWidth: 200 }}
+            value={visibleUsers}
+            onChange={onVisibleUsersChange}
+            placeholder="留空=不代看任何用户"
             tokenSeparators={[',']}
             maxTagCount={3}
           />

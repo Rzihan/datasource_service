@@ -20,11 +20,23 @@ type Spec struct {
 	Dims          []string
 	Metrics       []string
 	// Filter 是过滤条件树，支持 AND / OR 任意嵌套；为 nil 表示不加过滤。
-	Filter       *FilterNode
+	Filter *FilterNode
+	// RowFilters 是行级权限条件，由服务端根据数据源配置与登录态合成。
+	// 它们恒定以 AND 追加到 WHERE，不进用户的条件树——用户树的根可能是 OR，
+	// 塞进去会让权限条件被 OR 吞掉。
+	RowFilters   []RowFilter
 	OrderBy      []OrderBy
 	Limit        int
 	MaxLimit     int
 	DefaultLimit int
+}
+
+// RowFilter 一条已解析好的行级权限条件：列表达式 + 允许的值列表。
+// Expr 由服务端从 dim_map 换出来，不接收客户端传入的列文本。
+// Values 为空表示「一行都不匹配」（权限配置 fail-closed）。
+type RowFilter struct {
+	Expr   string
+	Values []string
 }
 
 // Param 是 SQL 的命名参数，由引擎层转成驱动的参数绑定。
@@ -86,6 +98,21 @@ func Build(spec Spec) (string, []Param, error) {
 		}
 	}
 	params := b.params
+
+	// 行级权限：恒以 AND 追加到 WHERE（聚合前）。
+	// 列表为空时 IN () 不匹配任何行——权限配置 fail-closed，宁可看不到也不能看到别人的。
+	for i, rf := range spec.RowFilters {
+		if rf.Expr == "" {
+			continue
+		}
+		name := fmt.Sprintf("rf%d", i)
+		values := rf.Values
+		if values == nil {
+			values = []string{}
+		}
+		whereParts = append(whereParts, fmt.Sprintf("%s IN ({%s:Array(String)})", rf.Expr, name))
+		params = append(params, Param{Name: name, Value: values})
+	}
 
 	// 排序字段必须是已选中的维度或指标，否则无法在 SELECT 里找到对应列。
 	var orderParts []string
@@ -354,12 +381,32 @@ func FilterNodeCount(n *FilterNode) int {
 }
 
 // BuildDimValuesSQL 生成「某维度的候选值」查询，供前端下拉枚举使用。
-func BuildDimValuesSQL(midSQL string, dimExpr string, limit int) string {
+//
+// 行级权限必须在这里一起注入：否则下拉框会把别人租户/用户下的取值也枚举出来，
+// 等于绕过了一半的行级管控。
+func BuildDimValuesSQL(midSQL string, dimExpr string, limit int, rowFilters []RowFilter) (string, []Param) {
 	mid := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(midSQL), ";"))
-	return fmt.Sprintf(
-		"SELECT DISTINCT %s AS value FROM (\n%s\n) AS %s WHERE %s IS NOT NULL ORDER BY value LIMIT %d",
-		dimExpr, mid, midAlias, dimExpr, limit,
+
+	var params []Param
+	var sb strings.Builder
+	fmt.Fprintf(&sb,
+		"SELECT DISTINCT %s AS value FROM (\n%s\n) AS %s WHERE %s IS NOT NULL",
+		dimExpr, mid, midAlias, dimExpr,
 	)
+	for i, rf := range rowFilters {
+		if rf.Expr == "" {
+			continue
+		}
+		name := fmt.Sprintf("rf%d", i)
+		values := rf.Values
+		if values == nil {
+			values = []string{}
+		}
+		fmt.Fprintf(&sb, " AND %s IN ({%s:Array(String)})", rf.Expr, name)
+		params = append(params, Param{Name: name, Value: values})
+	}
+	fmt.Fprintf(&sb, " ORDER BY value LIMIT %d", limit)
+	return sb.String(), params
 }
 
 // quote 用反引号包裹标识符。内部已做反引号转义，避免列名本身含反引号时破坏语法。

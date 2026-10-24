@@ -278,7 +278,43 @@ func normalizeACL(a model.ACL, dimMap, mtxMap map[string]string) (model.ACL, err
 		colTenants[col] = norm
 	}
 
-	return model.ACL{Tenants: tenants, ColTenants: colTenants}, nil
+	rowFilter, err := normalizeRowFilter(a.RowFilter, dimMap)
+	if err != nil {
+		return model.ACL{}, err
+	}
+
+	return model.ACL{Tenants: tenants, ColTenants: colTenants, RowFilter: rowFilter}, nil
+}
+
+// normalizeRowFilter 校验行级过滤配置。
+//
+// 只能映射到 dim_map 的键：行级过滤发生在聚合前，而 mtx_map 的表达式是聚合结果
+// （sum(...) 之类），放进 WHERE 会直接报错。所以指标键在这里必须挡住。
+func normalizeRowFilter(r model.RowFilter, dimMap map[string]string) (model.RowFilter, error) {
+	normalize := func(rule model.RowRule, field string) (model.RowRule, error) {
+		if !rule.Enabled {
+			// 关闭时把列名一起清掉，避免留下看不出作用的配置
+			return model.RowRule{}, nil
+		}
+		col := strings.TrimSpace(rule.Column)
+		if col == "" {
+			return model.RowRule{}, fmt.Errorf("%w: %s 已开启但 column 为空", ErrInvalid, field)
+		}
+		if _, ok := dimMap[col]; !ok {
+			return model.RowRule{}, fmt.Errorf("%w: %s 的 column %q 必须是该数据源 dim_map 里的维度（行级过滤发生在聚合前，不能映射到指标）", ErrInvalid, field, col)
+		}
+		return model.RowRule{Enabled: true, Column: col}, nil
+	}
+
+	tenant, err := normalize(r.Tenant, "acl.row_filter.tenant")
+	if err != nil {
+		return model.RowFilter{}, err
+	}
+	user, err := normalize(r.User, "acl.row_filter.user")
+	if err != nil {
+		return model.RowFilter{}, err
+	}
+	return model.RowFilter{Tenant: tenant, User: user}, nil
 }
 
 func normalizeKey(raw string) (string, error) {

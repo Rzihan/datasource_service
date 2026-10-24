@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { App, Button, Drawer, Form, Input, Space, Switch, Typography } from 'antd';
+import { App, Button, Drawer, Form, Input, Select, Space, Switch, Typography } from 'antd';
 import SqlEditor from './SqlEditor';
 import StringMapEditor from './StringMapEditor';
 import { createDatasource, updateDatasource } from '../api';
-import type { ACL, DatasourceConfig, StringMap } from '../types';
+import type { ACL, DatasourceConfig, RowFilter, RowRule, StringMap } from '../types';
 
 interface Props {
   open: boolean;
@@ -11,6 +11,12 @@ interface Props {
   onClose: () => void;
   onSaved: () => void;
 }
+
+// 行级过滤的两条规则：tenant 取登录态租户，user 取登录态可见用户。
+const ROW_RULE_KINDS: Array<{ key: 'tenant' | 'user'; label: string; hint: string }> = [
+  { key: 'tenant', label: '按登录态租户', hint: '取值来自请求头 X-Tenants' },
+  { key: 'user', label: '按可见用户', hint: '取值来自请求头 X-Visible-Users' },
+];
 
 export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   const { message } = App.useApp();
@@ -61,8 +67,15 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
     setLabelMap(next);
   };
 
-  // acl 以纯 JSON 编辑：结构灵活（后续会加 users / roles 等维度），
+  // acl 以纯 JSON 编辑：结构灵活（后续会加 roles 等维度），
   // 与其为每个维度做一套表单控件，不如直接编辑 JSON，校验交给后端。
+  const parsedACL = useMemo<ACL | null>(() => {
+    try {
+      return JSON.parse(aclText) as ACL;
+    } catch {
+      return null;
+    }
+  }, [aclText]);
   const aclError = useMemo(() => {
     try {
       JSON.parse(aclText);
@@ -71,6 +84,42 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       return (e as Error).message;
     }
   }, [aclText]);
+
+  // 行级过滤的开关与列名只是 acl JSON 的可视化入口：不额外存一份状态，
+  // 每次改动直接写回 JSON 文本，避免表单与 JSON 两处不一致。
+  const rowFilter = useMemo<RowFilter>(() => {
+    const rf = parsedACL?.row_filter ?? {};
+    return {
+      tenant: { enabled: false, ...(rf.tenant ?? {}) },
+      user: { enabled: false, ...(rf.user ?? {}) },
+    };
+  }, [parsedACL]);
+
+  const patchRowFilter = (kind: 'tenant' | 'user', patch: Partial<RowRule>) => {
+    const next: RowRule = { ...(rowFilter[kind] ?? { enabled: false }), ...patch };
+    const normalized: RowRule = { enabled: !!next.enabled };
+    if (normalized.enabled && next.column) normalized.column = next.column;
+    const nextRF: RowFilter = { ...rowFilter, [kind]: normalized };
+    const base: ACL = { ...(parsedACL ?? {}) };
+    // 两条规则都关掉时把 row_filter 整个摘掉，别留一个空壳在 JSON 里
+    if (nextRF.tenant?.enabled || nextRF.user?.enabled) {
+      base.row_filter = nextRF;
+    } else {
+      delete base.row_filter;
+    }
+    setAclText(JSON.stringify(base, null, 2));
+  };
+
+  // 行级过滤发生在聚合前，列名只能映射到 dim_map 的维度：
+  // mtx_map 是 sum(...) 这类聚合结果，放进 WHERE 会被 ClickHouse 拒绝。
+  const dimOptions = useMemo(() => {
+    const cols = new Set(Object.keys(dimMap));
+    for (const k of ['tenant', 'user'] as const) {
+      const c = rowFilter[k]?.column;
+      if (c) cols.add(c);
+    }
+    return [...cols].map((v) => ({ value: v, label: v }));
+  }, [dimMap, rowFilter]);
 
   const save = async () => {
     if (!key.trim()) {
@@ -88,6 +137,14 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
     if (aclError) {
       message.error(`acl 不是合法 JSON：${aclError}`);
       return;
+    }
+    // 开了行级过滤就必须指定列，否则后端会以 400 拒绝，这里提前拦一下
+    const rf = (JSON.parse(aclText) as ACL).row_filter ?? {};
+    for (const kind of ['tenant', 'user'] as const) {
+      if (rf[kind]?.enabled && !(rf[kind]?.column ?? '').trim()) {
+        message.warning(`行级权限：${kind === 'tenant' ? '按登录态租户' : '按可见用户'}已开启，请选择映射的维度`);
+        return;
+      }
     }
     const parsedACL = JSON.parse(aclText) as ACL;
     setSaving(true);
@@ -227,6 +284,52 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
         </Form.Item>
 
         <Form.Item
+          label="行级权限"
+          extra={
+            <Space direction="vertical" size={2}>
+              <span>
+                开启后，查询时会自动往 WHERE 追加「该维度 IN (登录态取值)」，对 /query/execute
+                与维度候选值接口同时生效；条件由服务端注入，前端传参无法绕过。
+              </span>
+              <span>
+                只能映射到 dim_map 的维度——行级过滤发生在聚合前，mtx_map 是聚合结果，放不进 WHERE。
+              </span>
+              <span>
+                登录态对应列表为空时按 fail-closed 处理：该数据源查不到任何行（不是放行全量）。
+              </span>
+            </Space>
+          }
+        >
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            {ROW_RULE_KINDS.map(({ key, label, hint }) => (
+              <Space key={key} size={8} wrap>
+                <Switch
+                  size="small"
+                  disabled={!!aclError}
+                  checked={!!rowFilter[key]?.enabled}
+                  onChange={(v) => patchRowFilter(key, { enabled: v })}
+                />
+                <Typography.Text style={{ display: 'inline-block', width: 100 }}>{label}</Typography.Text>
+                <Select
+                  size="small"
+                  allowClear
+                  showSearch
+                  disabled={!!aclError || !rowFilter[key]?.enabled}
+                  style={{ minWidth: 200 }}
+                  placeholder="选择 dim_map 里的维度"
+                  value={rowFilter[key]?.column || undefined}
+                  onChange={(v) => patchRowFilter(key, { column: v ?? '' })}
+                  options={dimOptions}
+                />
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {hint}
+                </Typography.Text>
+              </Space>
+            ))}
+          </Space>
+        </Form.Item>
+
+        <Form.Item
           label="acl"
           validateStatus={aclError ? 'error' : undefined}
           help={aclError || undefined}
@@ -237,12 +340,13 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
                 配置了则登录态租户与白名单有交集才可见。
               </span>
               <Typography.Text code>
-                {`{"tenants": ["t1","t2"], "col_tenants": {"${[...Object.keys(dimMap), ...Object.keys(mtxMap)][0] ?? 'cost'}": ["t1"]}}`}
+                {`{"tenants": ["t1","t2"], "col_tenants": {"${[...Object.keys(dimMap), ...Object.keys(mtxMap)][0] ?? 'cost'}": ["t1"]}, "row_filter": {"tenant": {"enabled": true, "column": "${Object.keys(dimMap)[0] ?? 'tenant'}"}}}`}
               </Typography.Text>
               <span>
                 col_tenants 的 key 必须是下面的维度或指标名之一：
                 {[...Object.keys(dimMap), ...Object.keys(mtxMap)].join('、') || '（请先填维度/指标）'}
               </span>
+              <span>上面的行级权限控件会同步写入这段 JSON 的 row_filter 字段。</span>
             </Space>
           }
         >

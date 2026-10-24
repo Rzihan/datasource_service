@@ -2,7 +2,7 @@ package middleware
 
 import "testing"
 
-func TestParseTenants(t *testing.T) {
+func TestParseMultiValue(t *testing.T) {
 	cases := []struct {
 		raw  string
 		want []string
@@ -19,24 +19,24 @@ func TestParseTenants(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		got := ParseTenants(c.raw)
+		got := ParseMultiValue(c.raw)
 		if len(got) != len(c.want) {
-			t.Fatalf("ParseTenants(%q) = %v, want %v", c.raw, got, c.want)
+			t.Fatalf("ParseMultiValue(%q) = %v, want %v", c.raw, got, c.want)
 		}
 		for i := range got {
 			if got[i] != c.want[i] {
-				t.Fatalf("ParseTenants(%q) = %v, want %v", c.raw, got, c.want)
+				t.Fatalf("ParseMultiValue(%q) = %v, want %v", c.raw, got, c.want)
 			}
 		}
 	}
 }
 
-func TestParseTenantsTruncates(t *testing.T) {
+func TestParseMultiValueTruncates(t *testing.T) {
 	long := make([]byte, 100)
 	for i := range long {
 		long[i] = 'x'
 	}
-	got := ParseTenants(string(long))
+	got := ParseMultiValue(string(long))
 	if len(got) != 1 || len(got[0]) != 64 {
 		t.Fatalf("expected single tenant truncated to 64 bytes, got %d bytes", len(got[0]))
 	}

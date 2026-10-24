@@ -46,8 +46,13 @@ func Operator(header string) gin.HandlerFunc {
 	}
 }
 
-// TenantCtxKey 是登录态租户在 gin context 里的键。
-const TenantCtxKey = "tenants"
+// 登录态在 gin context 里的键。
+const (
+	TenantCtxKey = "tenants"
+	// VisibleUsersCtxKey 是当前用户「能看到哪些用户的数据」的列表，用于行级权限过滤。
+	// 注意它与 operator（X-User，我是谁）不是一回事，这里是「我能看到谁」。
+	VisibleUsersCtxKey = "visible_users"
+)
 
 // Tenants 解析当前登录态所属的租户，来自 X-Tenants 请求头（逗号分隔，支持多租户）。
 //
@@ -58,13 +63,34 @@ func Tenants(header string) gin.HandlerFunc {
 		header = "X-Tenants"
 	}
 	return func(c *gin.Context) {
-		c.Set(TenantCtxKey, ParseTenants(c.GetHeader(header)))
+		c.Set(TenantCtxKey, ParseMultiValue(c.GetHeader(header)))
 		c.Next()
 	}
 }
 
-// ParseTenants 解析逗号分隔的租户串：去空白、丢弃空串、去重，保持原有顺序。
-func ParseTenants(raw string) []string {
+// VisibleUsers 解析当前登录态可见的用户列表，来自 X-Visible-Users 请求头（逗号分隔）。
+func VisibleUsers(header string) gin.HandlerFunc {
+	if header == "" {
+		header = "X-Visible-Users"
+	}
+	return func(c *gin.Context) {
+		c.Set(VisibleUsersCtxKey, ParseMultiValue(c.GetHeader(header)))
+		c.Next()
+	}
+}
+
+// CurrentVisibleUsers 从 gin context 取可见用户列表。
+func CurrentVisibleUsers(c *gin.Context) []string {
+	if v, ok := c.Get(VisibleUsersCtxKey); ok {
+		if list, ok := v.([]string); ok {
+			return list
+		}
+	}
+	return []string{}
+}
+
+// ParseMultiValue 解析逗号分隔的取值串：去空白、丢弃空串、去重，保持原有顺序。
+func ParseMultiValue(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return []string{}
 	}
@@ -124,7 +150,7 @@ func CORS() gin.HandlerFunc {
 		if origin != "" {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Content-Type,X-User,X-Tenants,X-Request-Id")
+			c.Header("Access-Control-Allow-Headers", "Content-Type,X-User,X-Tenants,X-Visible-Users,X-Request-Id")
 			c.Header("Access-Control-Max-Age", "86400")
 		}
 		if c.Request.Method == http.MethodOptions {

@@ -75,6 +75,23 @@ func filterColumns(m map[string]string, acl model.ACL, tenants []string) map[str
 	return out
 }
 
+// buildRowFilters 根据数据源配置与登录态合成行级权限条件。
+//
+// 列表达式只从服务端持有的 dim_map 里取，绝不采信客户端传入的文本。
+// 开启但登录态列表为空时保留空 Values：IN () 不匹配任何行，等价于拒绝——
+// 权限配置宁可看不到，也不能看到别人的数据。
+func buildRowFilters(ds *model.DatasourceConfig, tenants, users []string) []RowFilter {
+	rf := ds.ACL.RowFilter
+	var out []RowFilter
+	if rf.Tenant.Enabled {
+		out = append(out, RowFilter{Expr: ds.DimMap[rf.Tenant.Column], Values: tenants})
+	}
+	if rf.User.Enabled {
+		out = append(out, RowFilter{Expr: ds.DimMap[rf.User.Column], Values: users})
+	}
+	return out
+}
+
 // ensureColumnsVisible 校验请求里引用的列对当前登录态是否都可见。
 // 前端下拉已经过滤过，但请求本身可以被直接构造，所以服务端必须再挡一次。
 func ensureColumnsVisible(acl model.ACL, tenants []string, cols ...string) error {
@@ -90,7 +107,7 @@ func ensureColumnsVisible(acl model.ACL, tenants []string, cols ...string) error
 }
 
 // Execute 执行一次查询。
-func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator string, tenants []string) (*ExecuteResult, error) {
+func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator string, tenants, users []string) (*ExecuteResult, error) {
 	ds, err := s.repo.GetByKey(ctx, req.DatasourceKey)
 	if err != nil {
 		return nil, err
@@ -122,6 +139,7 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 		Dims:          req.Dims,
 		Metrics:       req.Metrics,
 		Filter:        req.Filter,
+		RowFilters:    buildRowFilters(ds, tenants, users),
 		OrderBy:       req.OrderBy,
 		Limit:         req.Limit,
 		MaxLimit:      s.cfg.MaxResultRows,
@@ -166,7 +184,7 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 }
 
 // DimValues 返回某个维度的候选值，供前端下拉枚举。
-func (s *Service) DimValues(ctx context.Context, datasourceKey, field string, tenants []string) ([]string, error) {
+func (s *Service) DimValues(ctx context.Context, datasourceKey, field string, tenants, users []string) ([]string, error) {
 	ds, err := s.repo.GetByKey(ctx, datasourceKey)
 	if err != nil {
 		return nil, err
@@ -182,7 +200,7 @@ func (s *Service) DimValues(ctx context.Context, datasourceKey, field string, te
 		return nil, fmt.Errorf("%w: 字段 %q 不是该数据源的维度", ErrInvalidQuery, field)
 	}
 
-	sqlText := BuildDimValuesSQL(ds.MidSQL, expr, s.cfg.DimValueLimit)
+	sqlText, params := BuildDimValuesSQL(ds.MidSQL, expr, s.cfg.DimValueLimit, buildRowFilters(ds, tenants, users))
 
 	select {
 	case s.sem <- struct{}{}:
@@ -194,7 +212,7 @@ func (s *Service) DimValues(ctx context.Context, datasourceKey, field string, te
 	queryCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	res, err := s.engine.Query(queryCtx, sqlText, nil)
+	res, err := s.engine.Query(queryCtx, sqlText, params)
 	if err != nil {
 		slog.Error("dim values query failed", "datasource_key", datasourceKey, "field", field, "error", err, "sql", sqlText)
 		return nil, err

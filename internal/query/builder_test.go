@@ -425,6 +425,74 @@ func TestBuildTreeRejectsUnknownLogic(t *testing.T) {
 	}
 }
 
+// 行级权限条件必须恒以 AND 追加到 WHERE，且不能被用户的 OR 分组吞掉。
+func TestBuildRowFilterAppendedToWhereWithAnd(t *testing.T) {
+	spec := baseSpec()
+	spec.RowFilters = []RowFilter{{Expr: "tenant_code", Values: []string{"t1", "t2"}}}
+	sql, params, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "WHERE tenant_code IN ({rf0:Array(String)})") {
+		t.Fatalf("row filter should land in WHERE:\n%s", sql)
+	}
+	if len(params) != 1 {
+		t.Fatalf("unexpected params: %+v", params)
+	}
+	if got, ok := params[0].Value.([]string); !ok || len(got) != 2 {
+		t.Fatalf("unexpected param value: %#v", params[0].Value)
+	}
+}
+
+// 用户条件树的根是 OR 时，行级权限仍要以 AND 挂在最外层。
+func TestBuildRowFilterNotSwallowedByUserOrGroup(t *testing.T) {
+	spec := baseSpec()
+	spec.Filter = &FilterNode{
+		Logic: "or",
+		Children: []FilterNode{
+			{Field: "city", Op: "=", Value: "北京"},
+			{Field: "city", Op: "=", Value: "上海"},
+		},
+	}
+	spec.RowFilters = []RowFilter{{Expr: "tenant_code", Values: []string{"t1"}}}
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 期望形态：WHERE (city_code = ... OR city_code = ...) AND tenant_code IN (...)
+	if !strings.Contains(sql, "AND tenant_code IN ({rf0:Array(String)})") {
+		t.Fatalf("row filter must be AND-ed outside the OR group:\n%s", sql)
+	}
+}
+
+// 登录态列表为空 = 一行都不匹配（fail-closed），不能退化成不过滤。
+func TestBuildRowFilterEmptyValuesStillFilters(t *testing.T) {
+	spec := baseSpec()
+	spec.RowFilters = []RowFilter{{Expr: "tenant_code", Values: nil}}
+	sql, params, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "tenant_code IN ({rf0:Array(String)})") {
+		t.Fatalf("empty value list must still emit the IN condition:\n%s", sql)
+	}
+	if got, ok := params[0].Value.([]string); !ok || len(got) != 0 {
+		t.Fatalf("expected empty slice, got %#v", params[0].Value)
+	}
+}
+
+// dim-values 同样要注入行级权限，否则下拉会把别人的取值枚举出来。
+func TestBuildDimValuesSQLInjectsRowFilter(t *testing.T) {
+	sql, params := BuildDimValuesSQL("select city_code from t", "city_code", 500,
+		[]RowFilter{{Expr: "tenant_code", Values: []string{"t1"}}})
+	if !strings.Contains(sql, "AND tenant_code IN ({rf0:Array(String)})") {
+		t.Fatalf("dim-values should inject row filter:\n%s", sql)
+	}
+	if len(params) != 1 {
+		t.Fatalf("unexpected params: %+v", params)
+	}
+}
+
 // 空分组没有意义，直接拒绝。
 func TestBuildTreeRejectsEmptyGroup(t *testing.T) {
 	spec := baseSpec()
@@ -497,8 +565,11 @@ func TestBuildDimFilterStillAllowsLike(t *testing.T) {
 }
 
 func TestBuildDimValuesSQL(t *testing.T) {
-	sql := BuildDimValuesSQL("select city_code from t", "city_code", 500)
+	sql, params := BuildDimValuesSQL("select city_code from t", "city_code", 500, nil)
 	if !strings.Contains(sql, "SELECT DISTINCT city_code AS value") || !strings.Contains(sql, "LIMIT 500") {
 		t.Fatalf("unexpected sql: %s", sql)
+	}
+	if len(params) != 0 {
+		t.Fatalf("no row filter should produce no params, got %+v", params)
 	}
 }

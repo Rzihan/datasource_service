@@ -28,7 +28,7 @@ func (h *Handler) Execute(c *gin.Context) {
 		handler.BadRequest(c, "请求体不是合法 JSON")
 		return
 	}
-	res, err := h.svc.Execute(c.Request.Context(), &req, operatorFromContext(c), tenantsFromContext(c))
+	res, err := h.svc.Execute(c.Request.Context(), &req, operatorFromContext(c), tenantsFromContext(c), usersFromContext(c))
 	if err != nil {
 		writeQueryError(c, err)
 		return
@@ -53,7 +53,7 @@ func (h *Handler) DimValues(c *gin.Context) {
 		handler.BadRequest(c, "缺少 field 参数")
 		return
 	}
-	values, err := h.svc.DimValues(c.Request.Context(), c.Param("key"), field, tenantsFromContext(c))
+	values, err := h.svc.DimValues(c.Request.Context(), c.Param("key"), field, tenantsFromContext(c), usersFromContext(c))
 	if err != nil {
 		writeQueryError(c, err)
 		return
@@ -79,6 +79,10 @@ func writeQueryError(c *gin.Context, err error) {
 
 func tenantsFromContext(c *gin.Context) []string {
 	return middleware.CurrentTenants(c)
+}
+
+func usersFromContext(c *gin.Context) []string {
+	return middleware.CurrentVisibleUsers(c)
 }
 
 func operatorFromContext(c *gin.Context) string {

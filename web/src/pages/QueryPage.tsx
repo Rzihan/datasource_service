@@ -5,7 +5,7 @@ import ResultView from '../components/ResultView';
 import { executeQuery, fetchDimValues, fetchQueryDatasources } from '../api';
 import type { FilterNode, OrderBy, QueryDatasource, QueryResult } from '../types';
 import { emptyRoot, pruneEmpty } from '../utils/filterTree';
-import { subscribeTenants } from '../tenants';
+import { subscribeTenants } from '../identity';
 
 export default function QueryPage() {
   const { message } = App.useApp();

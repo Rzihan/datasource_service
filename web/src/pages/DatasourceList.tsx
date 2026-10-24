@@ -83,13 +83,16 @@ export default function DatasourceList() {
       render: (v: Record<string, string>) => `${Object.keys(v ?? {}).length} 项`,
     },
     {
-      title: '租户白名单',
+      title: '权限管控',
       dataIndex: 'acl',
       width: 220,
       render: (acl: DatasourceConfig['acl']) => {
         const list = acl?.tenants ?? [];
         const cols = Object.keys(acl?.col_tenants ?? {});
-        if (list.length === 0 && cols.length === 0) {
+        const rows = (['tenant', 'user'] as const)
+          .filter((k) => acl?.row_filter?.[k]?.enabled)
+          .map((k) => ({ kind: k, column: acl?.row_filter?.[k]?.column ?? '' }));
+        if (list.length === 0 && cols.length === 0 && rows.length === 0) {
           return <Typography.Text type="secondary">不限制</Typography.Text>;
         }
         return (
@@ -108,6 +111,19 @@ export default function DatasourceList() {
                 {cols.map((c) => (
                   <Tooltip key={c} title={`${c}: ${(acl?.col_tenants?.[c] ?? []).join('、')}`}>
                     <Tag color="geekblue">{c}</Tag>
+                  </Tooltip>
+                ))}
+              </Space>
+            )}
+            {rows.length > 0 && (
+              <Space size={4} wrap>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>行</Typography.Text>
+                {rows.map((r) => (
+                  <Tooltip
+                    key={r.kind}
+                    title={`${r.kind === 'tenant' ? '登录态租户' : '可见用户'} IN (${r.column})`}
+                  >
+                    <Tag color="purple">{r.column}</Tag>
                   </Tooltip>
                 ))}
               </Space>

@@ -1,12 +1,32 @@
 export type StringMap = Record<string, string>;
 
-// 数据源级访问控制。用对象而不是数组，后续可以往里加 users / roles 等维度。
+// 行级过滤规则：把登录态的某个身份集合，映射到数据源里的一个维度列，
+// 查询时以「列 IN (...)」的形式追加到 WHERE。关闭 = 不追加。
+// column 只能取 dim_map 的键：行级过滤发生在聚合前，指标是聚合结果，放不进 WHERE。
+export interface RowRule {
+  enabled: boolean;
+  column?: string;
+}
+
+// 行级过滤整体开关。tenant 用登录态租户，user 用登录态可见用户。
+// 例：{"tenant":{"enabled":true,"column":"tenant"},"user":{"enabled":true,"column":"owner"}}
+export interface RowFilter {
+  tenant?: RowRule;
+  user?: RowRule;
+}
+
+// 数据源级访问控制。用对象而不是数组，后续可以往里加 roles 等维度。
 //   tenants：数据源级白名单，空 = 不限制
 //   col_tenants：列级白名单，key 是 dim_map / mtx_map 的键；没配的列默认可见
-// 示例：{"tenants":["t1","t2"],"col_tenants":{"stat_date":["t1"],"cost":["t1","t2"]}}
+//   row_filter：行级过滤，按登录态租户 / 可见用户过滤数据行
+// 示例：
+// {"tenants":["t1","t2"],
+//  "col_tenants":{"stat_date":["t1"],"cost":["t1","t2"]},
+//  "row_filter":{"tenant":{"enabled":true,"column":"tenant"}}}
 export interface ACL {
   tenants?: string[];
   col_tenants?: Record<string, string[]>;
+  row_filter?: RowFilter;
 }
 
 // 查询页看到的数据源：刻意不含 mid_sql（用户不感知 SQL）与 acl。

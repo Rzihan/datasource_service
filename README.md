@@ -93,37 +93,59 @@ deploy/mysql         init.sql 建表脚本
 | `/datasources` | 配置管理：datasource 的增删改查 |
 | `/query` | 可视化查询：选数据源 → 选维度/指标 → 加过滤 → 查数 → 看表格和图表 |
 
-## 租户与数据源级权限管控
+## 租户与权限管控（数据源级 / 列级 / 行级）
 
-**登录态**：顶栏「登录态租户」可填多个租户（一个用户可以属于多个租户），存在浏览器本地，
-随请求头 `X-Tenants: t1,t2` 带给后端——和「操作人」走 `X-User` 是同一套极简模式，系统不接鉴权。
+**登录态**：顶栏可填多个登录身份，存在浏览器本地，随请求头带给后端
+——和「操作人」走 `X-User` 是同一套极简模式，系统不接鉴权：
 
-**数据源侧**：配置表新增 JSON 列 `acl`，当前两级白名单，**在配置页以纯 JSON 编辑**：
+| 顶栏 | 请求头 | 用途 |
+| --- | --- | --- |
+| 登录态租户 | `X-Tenants: t1,t2` | 数据源级 / 列级白名单命中判断；行级 `tenant` 规则的取值 |
+| 可见用户 | `X-Visible-Users: u1,u2` | 行级 `user` 规则的取值（一个用户可以代看若干用户的数据） |
+
+**数据源侧**：配置表新增 JSON 列 `acl`，三级管控，**在配置页以纯 JSON 编辑**
+（`row_filter` 另有开关控件，控件改动会同步写回这段 JSON）：
 
 ```jsonc
 {
-  "tenants": ["t1", "t2"],                              // 数据源级：有交集才可见
-  "col_tenants": {"stat_date": ["t1"], "cost": ["t1", "t2"]}  // 列级：没配的列默认可见
+  "tenants": ["t1", "t2"],                                    // 数据源级：有交集才可见
+  "col_tenants": {"stat_date": ["t1"], "cost": ["t1", "t2"]}, // 列级：没配的列默认可见
+  "row_filter": {                                             // 行级：追加到 WHERE
+    "tenant": {"enabled": true, "column": "tenant"},
+    "user":   {"enabled": true, "column": "owner"}
+  }
 }
 ```
 
 - `tenants`：数据源级。空 / 不填 = 不限制。
 - `col_tenants`：列级。key 是 `dim_map` / `mtx_map` 的**键**（即查询页里看到的维度/指标名），
   没配的列默认可见，配了的列有交集才可见。
+- `row_filter`：行级。两条规则各自独立开关，`enabled` 为真时把「登录态取值」以
+  `列名 IN (...)` 的形式**追加到 WHERE 顶层**（与用户自己填的条件是 AND 关系，服务端注入，前端传参绕不过）。
 
-用 JSON **对象**而不是纯数组，是为了后续扩展：再加 `users` / `roles` / 读写分离时往对象里加字段即可，
+用 JSON **对象**而不是纯数组，是为了后续扩展：再加 `roles` / 读写分离时往对象里加字段即可，
 不必改表结构、不必迁存量数据。
 
+**行级过滤的三个约束**：
+
+1. `column` 只能取 `dim_map` 的键。行级过滤发生在**聚合前**，而 `mtx_map` 是
+   `sum(...)` / `uniq(...)` 这类聚合结果，放进 WHERE 会被 ClickHouse 直接拒绝。
+   服务层校验不通过即 400。
+2. 登录态对应列表为空时按 **fail-closed** 处理：该数据源查不到任何行，
+   而不是「放行全量」——权限配置宁可查不出，也不能多给。
+3. 两条规则都关闭时 `row_filter` 会被整体摘掉，不会在 JSON 里留空壳。
+
 列名拼错会让那一列**静默保持可见**——权限配置 fail-open 比报错更危险，
-所以服务层会校验 `col_tenants` 的每个 key 必须属于 `dim_map` / `mtx_map`，否则 400 并列出允许的列名。
+所以服务层会校验 `col_tenants` 的每个 key 必须属于 `dim_map` / `mtx_map`，
+`row_filter` 的 `column` 必须属于 `dim_map`，否则 400 并列出允许的列名。
 
 **管控范围**：按当前约定只管控**查询页**。
 
 | 接口 | 行为 |
 | --- | --- |
 | `GET /api/v1/query/datasources` | 已按数据源级过滤；`dim_map` / `mtx_map` / `label_map` 再按列级过滤。不含 `mid_sql` 与 `acl` |
-| `POST /api/v1/query/execute` | 数据源或列无权访问 → 403，并记 WARN 日志 |
-| `GET /api/v1/datasources/:key/dim-values` | 同上 |
+| `POST /api/v1/query/execute` | 数据源或列无权访问 → 403，并记 WARN 日志；行级过滤以 AND 追加到 WHERE |
+| `GET /api/v1/datasources/:key/dim-values` | 同上，维度候选值同样受行级过滤约束 |
 | 配置管理页的列表/详情/改删 | **不受影响**，所有数据源都可见可改 |
 
 `execute` 除了校验 `dims` / `metrics`，还会**遍历过滤条件树里的所有字段**——
@@ -246,6 +268,8 @@ LIMIT 1000
 | GET | `/datasources/:key/dim-values` | 某维度的候选值（`?field=city`），上限 `QUERY_DIM_VALUE_LIMIT` |
 | GET | `/healthz` `/readyz` | 存活 / 就绪探针（readyz 会 ping 数据库） |
 
+除 `Content-Type` 外，请求头还有三个：`X-User`（审计）、`X-Tenants`、`X-Visible-Users`（登录态身份）。
+
 示例：
 
 ```bash
@@ -325,4 +349,7 @@ curl -X POST localhost:8080/api/v1/datasources \
 - `mid_sql` 不做任何校验，写错的 SQL 要等下游执行时才暴露。列表页会截断展示 SQL，方便肉眼扫一遍。
 - 系统不接鉴权，操作人来自请求头 `X-User`（前端右上角填写，存 localStorage），
   仅用于审计字段 `created_by` / `updated_by`。如需接入 SSO，在 `middleware.Operator` 处替换即可。
+- 登录态租户 / 可见用户同样来自请求头（`X-Tenants` / `X-Visible-Users`），客户端传什么就按什么过滤。
+  **真实环境必须由网关注入或覆盖这两个头**，否则调用方可以自己给自己提权。
+  HTTP 头只能带 ASCII，所以租户 id 与用户 id 请保持 ASCII（中文值请走编码或用 ASCII 别名）。
 - 没有变更历史表。如需回滚能力，加一张 `datasource_config_history` 在 service 的写路径上插快照即可。
