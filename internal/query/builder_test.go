@@ -21,7 +21,7 @@ func baseSpec() Spec {
 
 func TestBuildBasic(t *testing.T) {
 	spec := baseSpec()
-	spec.Filters = []Filter{{Field: "city", Op: "=", Value: "北京"}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "city", Op: "=", Value: "北京"}}}
 	spec.OrderBy = []OrderBy{{Field: "cost", Desc: true}}
 	spec.Limit = 100
 
@@ -50,7 +50,7 @@ func TestBuildBasic(t *testing.T) {
 // 过滤值必须走参数绑定，绝不能出现在 SQL 字符串里——这是唯一的注入面。
 func TestBuildDoesNotInlineFilterValue(t *testing.T) {
 	spec := baseSpec()
-	spec.Filters = []Filter{{Field: "city", Op: "=", Value: "' OR 1=1 --"}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "city", Op: "=", Value: "' OR 1=1 --"}}}
 	sql, params, err := Build(spec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -65,7 +65,7 @@ func TestBuildDoesNotInlineFilterValue(t *testing.T) {
 
 func TestBuildInOperator(t *testing.T) {
 	spec := baseSpec()
-	spec.Filters = []Filter{{Field: "city", Op: "in", Values: []string{"北京", "上海"}}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "city", Op: "in", Values: []string{"北京", "上海"}}}}
 	sql, params, err := Build(spec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -124,16 +124,16 @@ func TestBuildRejects(t *testing.T) {
 		{"维度指标都为空", func(s *Spec) { s.Dims = nil; s.Metrics = nil }},
 		{"排序字段未选中", func(s *Spec) { s.OrderBy = []OrderBy{{Field: "city"}} }},
 		{"过滤字段不在 dim_map", func(s *Spec) {
-			s.Filters = []Filter{{Field: "nope", Op: "=", Value: "x"}}
+			s.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "nope", Op: "=", Value: "x"}}}
 		}},
 		{"非法操作符", func(s *Spec) {
-			s.Filters = []Filter{{Field: "city", Op: "drop", Value: "x"}}
+			s.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "city", Op: "drop", Value: "x"}}}
 		}},
 		{"过滤值为空", func(s *Spec) {
-			s.Filters = []Filter{{Field: "city", Op: "=", Value: "  "}}
+			s.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "city", Op: "=", Value: "  "}}}
 		}},
 		{"in 操作缺 values", func(s *Spec) {
-			s.Filters = []Filter{{Field: "city", Op: "in"}}
+			s.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "city", Op: "in"}}}
 		}},
 		{"mid_sql 为空", func(s *Spec) { s.MidSQL = "  " }},
 	}
@@ -152,7 +152,7 @@ func TestBuildRejects(t *testing.T) {
 // ClickHouse 不允许 Decimal 与 String 直接比较。
 func TestBuildMetricFilterGoesToHaving(t *testing.T) {
 	spec := baseSpec()
-	spec.Filters = []Filter{{Field: "cost", Op: ">", Value: "1000"}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "cost", Op: ">", Value: "1000"}}}
 	sql, params, err := Build(spec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -174,7 +174,7 @@ func TestBuildMetricFilterGoesToHaving(t *testing.T) {
 // 维度过滤仍然走 WHERE，参数保持 String。
 func TestBuildDimFilterStillUsesWhere(t *testing.T) {
 	spec := baseSpec()
-	spec.Filters = []Filter{{Field: "city", Op: "=", Value: "1000"}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "city", Op: "=", Value: "1000"}}}
 	sql, params, err := Build(spec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -188,11 +188,14 @@ func TestBuildDimFilterStillUsesWhere(t *testing.T) {
 }
 
 // 维度与指标同时过滤时，WHERE 与 HAVING 应共存且参数编号不冲突。
-func TestBuildMixedFilters(t *testing.T) {
+func TestBuildMixedDimAndMetricFilters(t *testing.T) {
 	spec := baseSpec()
-	spec.Filters = []Filter{
-		{Field: "city", Op: "=", Value: "北京"},
-		{Field: "cost", Op: ">=", Value: "500"},
+	spec.Filter = &FilterNode{
+		Logic: "and",
+		Children: []FilterNode{
+			{Field: "city", Op: "=", Value: "北京"},
+			{Field: "cost", Op: ">=", Value: "500"},
+		},
 	}
 	sql, params, err := Build(spec)
 	if err != nil {
@@ -211,7 +214,7 @@ func TestBuildMixedFilters(t *testing.T) {
 // 由 ClickHouse 报错，而不是在组装阶段就崩掉。
 func TestBuildMetricFilterNonNumeric(t *testing.T) {
 	spec := baseSpec()
-	spec.Filters = []Filter{{Field: "cost", Op: "=", Value: "abc"}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "cost", Op: "=", Value: "abc"}}}
 	sql, params, err := Build(spec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -226,7 +229,7 @@ func TestBuildMetricFilterNonNumeric(t *testing.T) {
 
 func TestBuildMetricInFilter(t *testing.T) {
 	spec := baseSpec()
-	spec.Filters = []Filter{{Field: "cost", Op: "in", Values: []string{"100", "200"}}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "cost", Op: "in", Values: []string{"100", "200"}}}}
 	sql, params, err := Build(spec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -246,7 +249,7 @@ func TestBuildMetricInFilter(t *testing.T) {
 func TestBuildMetricFilterUsesAliasWhenSelected(t *testing.T) {
 	spec := baseSpec()
 	spec.Metrics = []string{"click"}
-	spec.Filters = []Filter{{Field: "click", Op: ">", Value: "100"}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "click", Op: ">", Value: "100"}}}
 	sql, _, err := Build(spec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -263,7 +266,7 @@ func TestBuildMetricFilterUsesAliasWhenSelected(t *testing.T) {
 func TestBuildMetricFilterRejectsUnselectedMetric(t *testing.T) {
 	spec := baseSpec()
 	spec.Metrics = []string{"cost"}
-	spec.Filters = []Filter{{Field: "click", Op: ">", Value: "100"}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "click", Op: ">", Value: "100"}}}
 	_, _, err := Build(spec)
 	if err == nil {
 		t.Fatal("expected error when filtering on an unselected metric")
@@ -277,7 +280,7 @@ func TestBuildMetricFilterRejectsUnselectedMetric(t *testing.T) {
 func TestBuildMetricFilterOnSecondSelectedMetric(t *testing.T) {
 	spec := baseSpec()
 	spec.Metrics = []string{"cost", "click"}
-	spec.Filters = []Filter{{Field: "click", Op: ">", Value: "100"}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "click", Op: ">", Value: "100"}}}
 	sql, _, err := Build(spec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -469,26 +472,9 @@ func TestBuildTreeRejectsLeafWithoutField(t *testing.T) {
 	}
 }
 
-// 扁平 filters 仍然等价于「全部 AND 连接」，保证老调用方不受影响。
-func TestBuildFlatFiltersEqualsAndGroup(t *testing.T) {
-	spec := baseSpec()
-	spec.Filters = []Filter{
-		{Field: "city", Op: "=", Value: "北京"},
-		{Field: "cost", Op: ">", Value: "100"},
-	}
-	sql, _, err := Build(spec)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(sql, "WHERE city_code = {p0:String}") ||
-		!strings.Contains(sql, "HAVING `cost` > {p1:Float64}") {
-		t.Fatalf("unexpected sql:\n%s", sql)
-	}
-}
-
 func TestBuildMetricFilterRejectsLike(t *testing.T) {
 	spec := baseSpec()
-	spec.Filters = []Filter{{Field: "cost", Op: "like", Value: "25%"}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "cost", Op: "like", Value: "25%"}}}
 	_, _, err := Build(spec)
 	if err == nil {
 		t.Fatal("expected error for like on metric")
@@ -500,7 +486,7 @@ func TestBuildMetricFilterRejectsLike(t *testing.T) {
 
 func TestBuildDimFilterStillAllowsLike(t *testing.T) {
 	spec := baseSpec()
-	spec.Filters = []Filter{{Field: "city", Op: "like", Value: "杭%"}}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "city", Op: "like", Value: "杭%"}}}
 	sql, _, err := Build(spec)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

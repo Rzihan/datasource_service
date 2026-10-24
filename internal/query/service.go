@@ -44,7 +44,6 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 		MtxMap:        ds.MtxMap,
 		Dims:          req.Dims,
 		Metrics:       req.Metrics,
-		Filters:       req.Filters,
 		Filter:        req.Filter,
 		OrderBy:       req.OrderBy,
 		Limit:         req.Limit,
@@ -83,7 +82,7 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 	res.ElapsedMs = elapsed
 	slog.Info("query executed",
 		"operator", operator, "datasource_key", ds.DatasourceKey,
-		"dims", req.Dims, "metrics", req.Metrics, "filters", len(req.Filters)+FilterNodeCount(req.Filter),
+		"dims", req.Dims, "metrics", req.Metrics, "filters", FilterNodeCount(req.Filter),
 		"rows", res.RowCount, "truncated", res.Truncated, "elapsed_ms", elapsed,
 	)
 	return res, nil

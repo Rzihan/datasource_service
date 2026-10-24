@@ -33,13 +33,6 @@ export interface CreatePayload {
   status?: number;
 }
 
-export interface Filter {
-  field: string;
-  op: string;
-  value?: string;
-  values?: string[];
-}
-
 // 过滤条件树：分组节点带 logic + children，叶子节点带 field/op/value。
 // 分组可嵌套，用来表达 A AND (B OR C) 这类组合。
 export interface FilterNode {
@@ -61,7 +54,6 @@ export interface QueryRequest {
   datasource_key: string;
   dims: string[];
   metrics: string[];
-  filters?: Filter[];
   filter?: FilterNode;
   order_by: OrderBy[];
   limit: number;

@@ -35,17 +35,6 @@ const (
 	LogicOr  = "or"
 )
 
-// Filter 单个过滤条件。Value 用于单值比较，Values 用于 in / not in。
-//
-// 保留它是为了向后兼容：扁平的 filters 等价于「全部用 AND 连接」。
-// 需要 AND / OR 组合时请改用 FilterNode。
-type Filter struct {
-	Field  string   `json:"field"`
-	Op     string   `json:"op"`
-	Value  string   `json:"value"`
-	Values []string `json:"values"`
-}
-
 // FilterNode 过滤条件树的一个节点，二选一：
 //
 //   - 分组节点：Logic = and / or + Children
@@ -86,7 +75,6 @@ type ExecuteRequest struct {
 	DatasourceKey string      `json:"datasource_key"`
 	Dims          []string    `json:"dims"`
 	Metrics       []string    `json:"metrics"`
-	Filters       []Filter    `json:"filters"`
 	Filter        *FilterNode `json:"filter"`
 	OrderBy       []OrderBy   `json:"order_by"`
 	Limit         int         `json:"limit"`

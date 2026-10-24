@@ -19,9 +19,7 @@ type Spec struct {
 	MtxMap        map[string]string
 	Dims          []string
 	Metrics       []string
-	// Filters 是兼容字段：扁平列表，等价于「全部用 AND 连接」。
-	// Filter 是条件树，支持 AND / OR 任意嵌套；两者同时给时以 Filter 为准。
-	Filters      []Filter
+	// Filter 是过滤条件树，支持 AND / OR 任意嵌套；为 nil 表示不加过滤。
 	Filter       *FilterNode
 	OrderBy      []OrderBy
 	Limit        int
@@ -75,8 +73,8 @@ func Build(spec Spec) (string, []Param, error) {
 	// 过滤条件编译成 WHERE / HAVING 两段，见 compileFilter 的说明。
 	b := &filterCompiler{spec: spec}
 	var whereParts, havingParts []string
-	if root := spec.rootFilter(); root != nil {
-		c, err := b.compile(*root, 1)
+	if spec.Filter != nil {
+		c, err := b.compile(*spec.Filter, 1)
 		if err != nil {
 			return "", nil, err
 		}
@@ -140,22 +138,6 @@ func Build(spec Spec) (string, []Param, error) {
 	}
 	sb.WriteString(fmt.Sprintf("\nLIMIT %d", limit))
 	return sb.String(), params, nil
-}
-
-// rootFilter 取条件树：优先用 Filter（支持 AND / OR 嵌套），
-// 否则把扁平的 Filters 包成一个 AND 分组。
-func (s Spec) rootFilter() *FilterNode {
-	if s.Filter != nil {
-		return s.Filter
-	}
-	if len(s.Filters) == 0 {
-		return nil
-	}
-	children := make([]FilterNode, 0, len(s.Filters))
-	for _, f := range s.Filters {
-		children = append(children, FilterNode{Field: f.Field, Op: f.Op, Value: f.Value, Values: f.Values})
-	}
-	return &FilterNode{Logic: LogicAnd, Children: children}
 }
 
 // cond 是一个条件（或一组条件）编译后的两种形态：

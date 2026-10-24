@@ -114,8 +114,6 @@ deploy/mysql         init.sql 建表脚本
       ]}
     ]
   },
-  // 也支持扁平写法，等价于「全部 AND」：
-  // "filters": [{"field": "city", "op": "=", "value": "北京"}]
   "order_by":[{"field": "cost", "desc": true}],
   "limit":   1000                      // 服务端 clamp 到 QUERY_MAX_ROWS
 }
@@ -165,7 +163,7 @@ LIMIT 1000
 **安全**：`dims` / `metrics` / `order_by` / 过滤字段全部走白名单枚举校验，前端没有任何通道塞进任意 SQL；
 唯一的自由输入是过滤值，通过 ClickHouse 命名参数绑定，不参与字符串拼接。
 
-**维度过滤与指标过滤**：`filters[].field` 可以是 `dim_map` 的键，也可以是 `mtx_map` 的键。
+**维度过滤与指标过滤**：过滤条件树的叶子 `field` 可以是 `dim_map` 的键，也可以是 `mtx_map` 的键。
 前者落到 `WHERE`（先筛行再聚合），后者落到 `HAVING`（先聚合再筛结果），两者语义不同，必须分开。
 **指标必须是已勾选的指标**——没勾选就不会出现在结果里，拿它过滤用户看不到任何依据，
 所以后端直接拒绝（`过滤指标 "x" 未被勾选`），前端的下拉里也只列出已勾选的指标。
