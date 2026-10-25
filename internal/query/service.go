@@ -38,20 +38,31 @@ func formatParams(params []Param) string {
 	return strings.Join(parts, ", ")
 }
 
+// LabelProvider 提供全局字段名称字典（field_key → 中文名）。
+//
+// 定义成接口而不是直接依赖 service.LabelService：query 包只用到「查字典」这一个能力，
+// 用接口把它隔离开，避免查询链路顺带依赖上数据集 CRUD 的一整套规则。
+// 实现侧带进程内缓存，这里可以放心地每次调用。
+type LabelProvider interface {
+	Map(ctx context.Context) map[string]string
+}
+
 // Service 查询业务层：取配置 → 组装 SQL → 执行 → 记日志。
 type Service struct {
 	repo    *repo.DatasetRepo
 	engine  Engine
+	labels  LabelProvider
 	cfg     config.QueryConfig
 	timeout time.Duration
 	sem     chan struct{} // 并发闸门
 }
 
-// NewService 构造查询服务。
-func NewService(r *repo.DatasetRepo, e Engine, cfg config.QueryConfig, timeout time.Duration) *Service {
+// NewService 构造查询服务。labels 可为 nil，此时只使用数据集自己的 label_map。
+func NewService(r *repo.DatasetRepo, e Engine, labels LabelProvider, cfg config.QueryConfig, timeout time.Duration) *Service {
 	return &Service{
 		repo:    r,
 		engine:  e,
+		labels:  labels,
 		cfg:     cfg,
 		timeout: timeout,
 		sem:     make(chan struct{}, cfg.MaxConcurrency),
@@ -70,6 +81,11 @@ func (s *Service) VisibleDatasets(ctx context.Context, tenants []string) ([]Quer
 	if err != nil {
 		return nil, err
 	}
+	// 全局字典只在这里取一次，循环内复用；取不到时降级为空字典（展示回落到字段名）。
+	global := map[string]string{}
+	if s.labels != nil {
+		global = s.labels.Map(ctx)
+	}
 	out := make([]QueryDataset, 0, len(items))
 	for _, it := range items {
 		if !it.ACL.Allows(tenants) {
@@ -82,11 +98,45 @@ func (s *Service) VisibleDatasets(ctx context.Context, tenants []string) ([]Quer
 			DatasetName: it.DatasetName,
 			DimMap:      dims,
 			MtxMap:      mtxs,
-			// label_map 只保留还看得见的列，避免表头里出现用不到的中文名
-			LabelMap: filterColumns(it.LabelMap, it.ACL, tenants),
+			// 只对「当前数据集真的有、且当前登录态看得见」的列生成中文名：
+			// 以 dim_map / mtx_map 为准而不是以 label_map 为准，
+			// 否则数据集里已经删掉的列、或全局字典里跟本数据集无关的字段都会混进表头。
+			LabelMap: mergeLabels(dims, mtxs, it.LabelMap, global),
 		})
 	}
 	return out, nil
+}
+
+// mergeLabels 合并三层命名：数据集覆盖 → 全局定义 → 字段名兜底。
+//
+// 三态是这里的关键，覆盖层的「没有这个 key」和「显式空串」必须区分开：
+//   - 覆盖层没有 key            → 继承全局定义
+//   - 覆盖层非空                → 覆盖，只作用于本数据集
+//   - 覆盖层是 ""（显式空串）   → 明确「不使用中文名」，即使全局有定义也不继承
+//     （典型场景：本数据集的同名字段与全局语义不同，又不想另起一个名字）
+//
+// 兜底由前端完成：map 里没有的字段，前端直接显示字段名本身，这里不写空值。
+func mergeLabels(dims, mtxs, override, global map[string]string) map[string]string {
+	out := make(map[string]string, len(dims)+len(mtxs))
+	put := func(k string) {
+		if v, ok := override[k]; ok {
+			// 命中覆盖层：空串也是有意义的显式声明，直接跳过不写
+			if v != "" {
+				out[k] = v
+			}
+			return
+		}
+		if v := global[k]; v != "" {
+			out[k] = v
+		}
+	}
+	for k := range dims {
+		put(k)
+	}
+	for k := range mtxs {
+		put(k)
+	}
+	return out
 }
 
 // filterColumns 按列级白名单过滤。键名就是维度/指标名，与 label_map 的键一致。

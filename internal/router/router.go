@@ -25,6 +25,7 @@ type Deps struct {
 	Config *config.Config
 	DB     *gorm.DB
 	DS     *handler.DatasetHandler
+	LH     *handler.LabelHandler
 	QH     *query.Handler
 }
 
@@ -52,6 +53,16 @@ func New(d Deps) *gin.Engine {
 		v1.GET("/datasets/:key", d.DS.Get)
 		v1.PUT("/datasets/:key", d.DS.Update)
 		v1.DELETE("/datasets/:key", d.DS.Delete)
+
+		// 全局字段名称定义（对所有数据集生效的「字段名 → 中文名」字典）
+		v1.GET("/labels", d.LH.List)
+		v1.POST("/labels", d.LH.Create)
+		v1.GET("/labels/:key", d.LH.Get)
+		v1.PUT("/labels/:key", d.LH.Update)
+		v1.DELETE("/labels/:key", d.LH.Delete)
+		// 全量字典，供数据集编辑页显示「继承：XXX」。
+		// 刻意不挂在 /labels 下：/labels/:key 的通配段会与同级静态段冲突。
+		v1.GET("/label-map", d.LH.Map)
 
 		// 查询页可选的数据集，已按登录态租户过滤
 		v1.GET("/query/datasets", d.QH.Datasets)

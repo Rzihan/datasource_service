@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { App, Button, Drawer, Form, Input, Select, Space, Switch, Typography } from 'antd';
+import { App, Button, Drawer, Form, Input, Select, Space, Switch, Tag, Typography } from 'antd';
 import SqlEditor from './SqlEditor';
 import StringMapEditor from './StringMapEditor';
-import { createDataset, updateDataset } from '../api';
+import { createDataset, fetchLabelMap, updateDataset } from '../api';
 import type { ACL, DatasetConfig, RowFilter, RowRule, StringMap } from '../types';
 
 interface Props {
@@ -34,6 +34,27 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   const [labelMap, setLabelMap] = useState<StringMap>({});
   const [aclText, setAclText] = useState('{}');
   const [enabled, setEnabled] = useState(true);
+  // 全局字段名称字典，用来提示哪条中文名是继承来的。拉不到就当没有，不影响编辑。
+  const [globalLabels, setGlobalLabels] = useState<StringMap>({});
+
+  useEffect(() => {
+    if (!open) return;
+    void fetchLabelMap()
+      .then((res) => setGlobalLabels(res.label_map ?? {}))
+      .catch(() => setGlobalLabels({}));
+  }, [open]);
+
+  // 本数据集没有单独定义、但全局字典里有的字段——它们会直接用全局的中文名。
+  // 列出来是为了让人知道「我没配不代表没名字」，也方便发现同名不同义。
+  const inheritedPreview = useMemo(() => {
+    const out: Array<[string, string]> = [];
+    for (const k of [...Object.keys(dimMap), ...Object.keys(mtxMap)]) {
+      if (k in labelMap) continue;
+      const g = globalLabels[k];
+      if (g) out.push([k, g]);
+    }
+    return out;
+  }, [dimMap, mtxMap, labelMap, globalLabels]);
 
   useEffect(() => {
     if (!open) return;
@@ -291,11 +312,26 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
         <Form.Item
           label="label_map"
           extra={
-            <Space>
-              <span>维度与指标的中文含义，只影响查询页的展示，不参与 SQL 生成</span>
-              <Button type="link" size="small" style={{ padding: 0 }} onClick={fillLabels}>
-                按维度/指标补齐
-              </Button>
+            <Space direction="vertical" size={2}>
+              <Space>
+                <span>
+                  中文含义，只影响查询页的展示，不参与 SQL 生成。留空 = 继承全局定义；
+                  填了 = 只覆盖本数据集；想彻底不用中文名就删掉整行
+                </span>
+                <Button type="link" size="small" style={{ padding: 0 }} onClick={fillLabels}>
+                  按维度/指标补齐
+                </Button>
+              </Space>
+              {inheritedPreview.length > 0 && (
+                <Space size={4} wrap>
+                  <Typography.Text type="secondary">继承全局：</Typography.Text>
+                  {inheritedPreview.map(([k, v]) => (
+                    <Tag key={k} color="blue">
+                      {k} → {v}
+                    </Tag>
+                  ))}
+                </Space>
+              )}
             </Space>
           }
         >
@@ -304,6 +340,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
             onChange={setLabelMap}
             placeholderKey="维度或指标名，例如 cost"
             placeholderValue="中文含义，例如 消耗"
+            inherited={globalLabels}
           />
         </Form.Item>
 

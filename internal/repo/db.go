@@ -61,9 +61,9 @@ func PingDB(db *gorm.DB, timeout time.Duration) error {
 // 仅在 DB_AUTO_MIGRATE=true 时调用，方便本地一键起。
 func AutoMigrate(db *gorm.DB) error {
 	if err := db.Set("gorm:table_options", "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci").
-		AutoMigrate(&DatasetConfigModel{}); err != nil {
+		AutoMigrate(&DatasetConfigModel{}, &GlobalLabelModel{}); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
 	}
-	slog.Info("auto migrate finished", "table", "tb_dataset_config")
+	slog.Info("auto migrate finished", "tables", "tb_dataset_config, tb_global_label")
 	return nil
 }

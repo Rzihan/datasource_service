@@ -2,10 +2,15 @@ import axios from 'axios';
 import type {
   CreatePayload,
   DatasetConfig,
+  GlobalLabel,
+  LabelCreatePayload,
+  LabelListResult,
+  LabelUpdatePayload,
   ListResult,
   QueryDataset,
   QueryRequest,
   QueryResult,
+  StringMap,
   UpdatePayload,
 } from './types';
 
@@ -64,4 +69,29 @@ export function executeQuery(payload: QueryRequest): Promise<QueryResult> {
 
 export function fetchDimValues(key: string, field: string): Promise<{ field: string; values: string[] }> {
   return unwrap(http.get(`/datasets/${encodeURIComponent(key)}/dim-values`, { params: { field } }));
+}
+
+export function fetchLabelList(params: {
+  page: number;
+  size: number;
+  keyword?: string;
+}): Promise<LabelListResult> {
+  return unwrap(http.get('/labels', { params }));
+}
+
+// 全量字典。数据集编辑页用它显示「继承：XXX」提示，因此不走分页。
+export function fetchLabelMap(): Promise<{ label_map: StringMap }> {
+  return unwrap(http.get('/label-map'));
+}
+
+export function createLabel(payload: LabelCreatePayload): Promise<GlobalLabel> {
+  return unwrap(http.post('/labels', payload));
+}
+
+export function updateLabel(key: string, payload: LabelUpdatePayload): Promise<GlobalLabel> {
+  return unwrap(http.put(`/labels/${encodeURIComponent(key)}`, payload));
+}
+
+export function deleteLabel(key: string): Promise<unknown> {
+  return unwrap(http.delete(`/labels/${encodeURIComponent(key)}`));
 }

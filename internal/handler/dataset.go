@@ -119,6 +119,12 @@ func writeError(c *gin.Context, err error) {
 		Fail(c, http.StatusConflict, http.StatusConflict, err.Error())
 	case errors.Is(err, repo.ErrVersionConflict):
 		Fail(c, http.StatusConflict, http.StatusConflict, err.Error())
+	case errors.Is(err, repo.ErrLabelNotFound):
+		Fail(c, http.StatusNotFound, http.StatusNotFound, err.Error())
+	case errors.Is(err, repo.ErrLabelDuplicateKey):
+		Fail(c, http.StatusConflict, http.StatusConflict, err.Error())
+	case errors.Is(err, repo.ErrLabelVersionConflict):
+		Fail(c, http.StatusConflict, http.StatusConflict, err.Error())
 	case errors.Is(err, service.ErrInvalid):
 		BadRequest(c, err.Error())
 	default:

@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Input, Skeleton, Space, Table, Tabs, Typography } from 'antd';
+import { Alert, Button, Input, Skeleton, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
+import type { ColumnsType } from 'antd/es/table';
 import type { StringMap } from '../types';
 
 const MonacoEditor = lazy(() => import('./MonacoEditor'));
@@ -10,6 +11,9 @@ interface Props {
   onChange: (value: StringMap) => void;
   placeholderKey?: string;
   placeholderValue?: string;
+  // 全局字段名称字典。只有 label_map 会传：传了就多一列「来源」，
+  // 并把继承来的中文名填进输入框的 placeholder，让人看清哪条是覆盖、哪条是继承。
+  inherited?: StringMap;
 }
 
 type Row = { id: number; key: string; value: string };
@@ -32,7 +36,7 @@ function toMap(rows: Row[]): StringMap {
 
 // dim_map / mtx_map 就是 map[string]string，结构极简，
 // 因此做成「表格 / JSON」双模式：不会写 JSON 的人用表格，想批量粘贴的人切 JSON。
-export default function StringMapEditor({ value, onChange, placeholderKey, placeholderValue }: Props) {
+export default function StringMapEditor({ value, onChange, placeholderKey, placeholderValue, inherited }: Props) {
   const [rows, setRows] = useState<Row[]>(() => toRows(value));
   const [mode, setMode] = useState<'table' | 'json'>('table');
   const [jsonText, setJsonText] = useState(() => JSON.stringify(value ?? {}, null, 2));
@@ -97,7 +101,7 @@ export default function StringMapEditor({ value, onChange, placeholderKey, place
     }
   };
 
-  const columns = [
+  const columns: ColumnsType<Row> = [
     {
       title: '键',
       dataIndex: 'key',
@@ -118,12 +122,49 @@ export default function StringMapEditor({ value, onChange, placeholderKey, place
       render: (_: unknown, row: Row) => (
         <Input
           value={row.value}
-          placeholder={placeholderValue ?? '例如 sum(stat_cost)'}
+          placeholder={
+            inherited?.[row.key.trim()]
+              ? `继承：${inherited[row.key.trim()]}` // 留空即继承全局，这里直接把继承值显示出来
+              : (placeholderValue ?? '例如 sum(stat_cost)')
+          }
           onChange={(e) => updateRow(row.id, { value: e.target.value })}
           onBlur={() => onChange(toMap(rowsRef.current))}
         />
       ),
     },
+    // 来源列只在编辑 label_map 时出现：把「覆盖 / 继承 / 与全局一致」说清楚，
+    // 否则同名不同义的字段改了全局字典后会静默变错，没人能发现。
+    ...(inherited
+      ? [
+          {
+            title: '来源',
+            width: 130,
+            render: (_: unknown, row: Row) => {
+              const k = row.key.trim();
+              if (!k) return null;
+              const global = inherited[k];
+              if (!global) {
+                return row.value ? <Tag color="green">自定义</Tag> : null;
+              }
+              if (row.value === '') {
+                return (
+                  <Tooltip title="留空表示本数据集不使用中文名，即使全局有定义也不继承">
+                    <Tag color="orange">不继承</Tag>
+                  </Tooltip>
+                );
+              }
+              if (row.value === global) {
+                return <Tag color="blue">与全局一致</Tag>;
+              }
+              return (
+                <Tooltip title={`全局定义为「${global}」，此处被覆盖为「${row.value}」`}>
+                  <Tag color="purple">覆盖全局</Tag>
+                </Tooltip>
+              );
+            },
+          },
+        ]
+      : []),
     {
       title: '',
       width: 56,

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { App as AntApp, Input, Layout, Menu, Select, Space, Typography } from 'antd';
-import { AppstoreOutlined, BarChartOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, BarChartOutlined, TagsOutlined } from '@ant-design/icons';
 import DatasetList from './pages/DatasetList';
+import LabelList from './pages/LabelList';
 import QueryPage from './pages/QueryPage';
 import { readTenants, readVisibleUsers, writeTenants, writeVisibleUsers } from './identity';
 
@@ -10,6 +11,7 @@ const OPERATOR_KEY = 'ds_operator';
 
 const menuItems = [
   { key: '/datasets', icon: <AppstoreOutlined />, label: '配置管理' },
+  { key: '/labels', icon: <TagsOutlined />, label: '字段名称' },
   { key: '/query', icon: <BarChartOutlined />, label: '可视化查询' },
 ];
 
@@ -105,6 +107,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/datasets" replace />} />
             <Route path="/datasets" element={<DatasetList />} />
+            <Route path="/labels" element={<LabelList />} />
             <Route path="/query" element={<QueryPage />} />
             <Route path="*" element={<Navigate to="/datasets" replace />} />
           </Routes>

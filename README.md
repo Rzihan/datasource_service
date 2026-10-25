@@ -9,7 +9,9 @@ dataset 配置的增删改查服务。一条配置包含五个字段：
 | `mid_sql` | mediumtext | 中间层 SQL，**纯文本存储，不做语法/语义校验** |
 | `dim_map` | json | 维度映射，`map[string]string` |
 | `mtx_map` | json | 指标映射，`map[string]string` |
-| `label_map` | json | 维度/指标的中文含义，`map[string]string`，**只影响展示**，不参与 SQL 生成 |
+| `label_map` | json | 维度/指标的中文含义，`map[string]string`，**只影响展示**，不参与 SQL 生成。它是**覆盖层**：留空则继承全局字典（见下节） |
+
+另有一张全局字典表 `tb_global_label`（`field_key` → `label`），对所有数据集生效。
 
 技术栈：Go 1.26 + gin + GORM + MySQL 8.0 / React 18 + TypeScript + Vite + Ant Design 5 + Monaco / Docker Compose。
 
@@ -117,12 +119,60 @@ web                  React 前端
 deploy/mysql         init.sql 建表脚本
 ```
 
-## 两个页面
+## 三个页面
 
 | 路由 | 功能 |
 | --- | --- |
 | `/datasets` | 配置管理：dataset 的增删改查 |
+| `/labels` | 字段名称：全局「字段名 → 中文名」字典，对所有数据集生效 |
 | `/query` | 可视化查询：选数据集 → 选维度/指标 → 加过滤 → 查数 → 看表格和图表 |
+
+## 字段名称：全局字典 + 数据集覆盖
+
+同一个 `city` 原本要在每个数据集里重复写一遍「城市」。现在抽了一层全局字典，
+数据集侧的 `label_map` 退化成覆盖层：
+
+```
+最终展示名 = 数据集 label_map[k]  →  全局 tb_global_label[k]  →  字段名 k
+             （优先级高）                                        （优先级低）
+```
+
+**三态语义**（这是唯一容易踩空的地方）：
+
+| 数据集 `label_map` 的状态 | 结果 |
+| --- | --- |
+| 没有这个 key | 继承全局定义 |
+| `label_map[k]` 非空 | 覆盖，只作用于当前数据集 |
+| `label_map[k]` 为 `""`（显式空串） | **不继承**全局，退回显示字段名本身 |
+
+第三种是给「本数据集的同名字段与全局语义不同、又不想另起名字」准备的。
+数据集编辑页的 `label_map` 表格会多一列「来源」，把「覆盖 / 与全局一致 / 不继承 / 自定义」
+直接标出来，并在表单项下方列出「继承全局：city → 城市 …」，避免改了全局之后静默变错。
+
+**合并发生在服务端**（`query.Service.VisibleDatasets`），前端拿到的 `label_map` 就是最终值，
+所以查询页下拉、结果表头、图表轴与图例三处消费点都不需要知道全局字典的存在。
+
+几个实现取舍：
+
+- **只对真实存在的列生成名字**：以 `dim_map` / `mtx_map`（且通过列级权限过滤后）为准，
+  不是以 `label_map` 或全局字典为准。否则全局字典里跟本数据集无关的字段会混进表头。
+- **停用 = 不存在**：全局定义可以停用，停用后引用它的数据集退回显示字段名。
+- **进程内缓存 30 秒**：字典会被每个数据集、每次查询读到，不缓存等于每次列表都打一遍全表。
+  写操作会立即失效本进程缓存；多实例部署时其他实例靠 TTL 兜底——纯展示字段晚几秒无所谓。
+- **读失败绝不阻断查询**：字典取不到时降级为空字典（显示字段名），甚至沿用上一次的缓存，
+  不把错误抛给查询主流程。为了显示中文名而让整个查询失败是本末倒置。
+- **`field_key` 不可改**：改名等价于「删一条 + 建一条」，原地改会让引用它的数据集在
+  不知情的情况下换名字。
+
+存量环境升级：
+
+```bash
+mysql < deploy/mysql/migrate_add_global_label.sql
+```
+
+脚本会建表、把「多个数据集都有且中文名一致」的公共字段（`city` / `cost` / `channel` /
+`date` / `uv`）提到全局，**并把这些 key 从各数据集的 `label_map` 里摘掉**——不摘的话
+覆盖层会永远压着全局，改全局看不出效果。
 
 ## 租户与权限管控（数据集级 / 列级 / 行级）
 
@@ -174,7 +224,7 @@ deploy/mysql         init.sql 建表脚本
 
 | 接口 | 行为 |
 | --- | --- |
-| `GET /api/v1/query/datasets` | 已按数据集级过滤；`dim_map` / `mtx_map` / `label_map` 再按列级过滤。不含 `mid_sql` 与 `acl` |
+| `GET /api/v1/query/datasets` | 已按数据集级过滤；`dim_map` / `mtx_map` 再按列级过滤，`label_map` 为「全局字典 + 数据集覆盖」合并后、且只含可见列的结果。不含 `mid_sql` 与 `acl` |
 | `POST /api/v1/query/execute` | 数据集或列无权访问 → 403，并记 WARN 日志；行级过滤以 AND 追加到 WHERE |
 | `GET /api/v1/datasets/:key/dim-values` | 同上，维度候选值同样受行级过滤约束 |
 | 配置管理页的列表/详情/改删 | **不受影响**，所有数据集都可见可改 |
@@ -383,6 +433,12 @@ from demo.t_order_dtl f
 | PUT | `/datasets/:key` | 全量更新，带 `version` 乐观锁，冲突返回 409 |
 | DELETE | `/datasets/:key` | 软删除 |
 | POST | `/datasets/validate` | 只校验 dim_map / mtx_map，不落库 |
+| GET | `/labels` | 全局字段名称列表，参数 `page` `size` `keyword` `status` |
+| GET | `/labels/:field_key` | 单条全局定义 |
+| POST | `/labels` | 新建，`field_key` 冲突返回 409 |
+| PUT | `/labels/:field_key` | 更新中文名与启停，带 `version` 乐观锁；`field_key` 不可改 |
+| DELETE | `/labels/:field_key` | 软删除 |
+| GET | `/label-map` | 全量字典 `{field_key: 中文名}`，供编辑页显示继承提示（不分页） |
 | POST | `/query/execute` | 按查询意图执行查询，返回列、行、耗时、是否截断 |
 | GET | `/datasets/:key/dim-values` | 某维度的候选值（`?field=city`），上限 `QUERY_DIM_VALUE_LIMIT` |
 | GET | `/healthz` `/readyz` | 存活 / 就绪探针（readyz 会 ping 数据库） |
@@ -471,4 +527,8 @@ curl -X POST localhost:8080/api/v1/datasets \
 - 登录态租户 / 可见用户同样来自请求头（`X-Tenants` / `X-Visible-Users`），客户端传什么就按什么过滤。
   **真实环境必须由网关注入或覆盖这两个头**，否则调用方可以自己给自己提权。
   HTTP 头只能带 ASCII，所以租户 id 与用户 id 请保持 ASCII（中文值请走编码或用 ASCII 别名）。
+- 全局字典的 `field_key` 强制小写，但数据集的 `dim_map` / `mtx_map` 的键目前**没有**强制小写。
+  如果你在 `dim_map` 里写了 `Cost`，全局定义的 `cost` 不会生效，而且不会有任何报错——
+  表头静默显示 `Cost`。同名不同义的排查也依赖人工，冲突检测视图还没做。
+- 字段名称页的「引用数据集」列只扫描前 200 个数据集，是个量级参考，不是精确统计。
 - 没有变更历史表。如需回滚能力，加一张 `tb_dataset_config_history` 在 service 的写路径上插快照即可。

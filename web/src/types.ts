@@ -123,3 +123,37 @@ export interface UpdatePayload {
   status?: number;
   version: number;
 }
+
+// 全局字段名称定义：一份「字段名 → 中文名」的字典，对所有数据集生效。
+// 数据集自己的 label_map 是覆盖层，优先级更高。
+export interface GlobalLabel {
+  id: number;
+  field_key: string;
+  label: string;
+  status: number;
+  version: number;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LabelListResult {
+  items: GlobalLabel[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface LabelCreatePayload {
+  field_key: string;
+  label: string;
+  status?: number;
+}
+
+// field_key 不可改：改名等价于删一条建一条，原地改会让引用它的数据集在不知情下换名字。
+export interface LabelUpdatePayload {
+  label: string;
+  status?: number;
+  version: number;
+}
