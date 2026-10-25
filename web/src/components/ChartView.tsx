@@ -1,4 +1,4 @@
-import { Area, Bar, Column, DualAxes, Line, Pie } from '@ant-design/charts';
+import { Column, Line, Pie } from '@ant-design/charts';
 import type { FC } from 'react';
 
 // G2 v5 的配置项非常宽（且版本间变动大），逐项对齐类型不划算。
@@ -7,10 +7,7 @@ import type { FC } from 'react';
 type LooseChart = FC<Record<string, unknown>>;
 const LLine = Line as unknown as LooseChart;
 const LColumn = Column as unknown as LooseChart;
-const LBar = Bar as unknown as LooseChart;
-const LArea = Area as unknown as LooseChart;
 const LPie = Pie as unknown as LooseChart;
-const LDualAxes = DualAxes as unknown as LooseChart;
 
 // 图表的数据点是「长表」：一行 = X 类目 × 一个系列 的一个点。
 // 用长表而不是宽表，是为了让「多指标」和「按第二维度分组」走同一条构建路径。
@@ -21,13 +18,14 @@ export interface ChartPoint {
   raw: string; // 后端返回的原始值，tooltip 用它与表格对齐
 }
 
-export type ChartType = 'line' | 'column' | 'bar' | 'area' | 'pie' | 'dual';
+// 图表类型就是页面上的三个图 tab，外加表格。刻意不做柱状之外的变形：
+// 类型越多，用户越要理解「条形图和柱状图有什么区别」，收益远小于成本。
+export type ChartType = 'column' | 'line' | 'pie';
 
 interface Props {
   data: ChartPoint[];
   type: ChartType;
   series: string[];
-  stacked?: boolean;
   height?: number;
   xCount?: number; // X 类目数，过多时加 slider
   xLabel?: string;
@@ -49,23 +47,20 @@ export default function ChartView({
   data,
   type,
   series,
-  stacked,
   height = 340,
   xCount = 0,
   xLabel,
   yLabel,
 }: Props) {
   // 轴标签防重叠：类目多时自动旋转 + 自动隐藏，再多就上滑块
-  const axis: Record<string, unknown> = {
-    x: {
-      title: xLabel || null,
-      labelAutoRotate: true,
-      labelAutoHide: true,
-    },
-    y: {
-      title: yLabel || null,
-      labelFormatter: (v: unknown) => compactNumber(Number(v)),
-    },
+  const xAxis: Record<string, unknown> = {
+    title: xLabel || null,
+    labelAutoRotate: true,
+    labelAutoHide: true,
+  };
+  const yAxis: Record<string, unknown> = {
+    title: yLabel || null,
+    labelFormatter: (v: unknown) => compactNumber(Number(v)),
   };
   const slider = xCount > 30 ? { x: {} } : undefined;
 
@@ -79,41 +74,31 @@ export default function ChartView({
   if (type === 'pie') {
     const first = series[0];
     const pieData = data.filter((d) => d.series === first).map((d) => ({ x: d.x, y: d.y ?? 0, raw: d.raw }));
-    const cfg: Record<string, unknown> = {
-      data: pieData,
-      angleField: 'y',
-      colorField: 'x',
-      height,
-      autoFit: true,
-      label: { text: (d: { x: string }) => d.x, position: 'outside' },
-      legend: { position: 'right' },
-      tooltip: { items: [(d: { x: string; raw: string }) => ({ name: d.x, value: d.raw || '—' })] },
-    };
-    return <LPie {...cfg} />;
-  }
-
-  if (type === 'dual') {
-    // 双 Y 轴：两条轴各自独立缩放，解决「消耗」和「点击数」差几个数量级的问题
-    const two = series.slice(0, 2);
-    const wide = new Map<string, Record<string, unknown>>();
-    for (const p of data) {
-      if (!two.includes(p.series)) continue;
-      const row = wide.get(p.x) ?? { x: p.x };
-      row[p.series] = p.y ?? 0;
-      wide.set(p.x, row);
-    }
-    const cfg: Record<string, unknown> = {
-      data: [...wide.values()],
-      xField: 'x',
-      yField: two,
-      height,
-      autoFit: true,
-      axis,
-      slider,
-      legend: { position: 'top' },
-      tooltip: { title: (d: { x: string }) => d.x },
-    };
-    return <LDualAxes {...cfg} />;
+    // 饼图看的是占比，光给绝对值等于要人自己在脑子里除一遍。
+    // 占比在前端算：数据本来就在内存里，后端不该为展示口径再改接口。
+    // 总量为 0 或含负数导致占比失去意义时，退回只显示数值。
+    const total = pieData.reduce((s, d) => s + d.y, 0);
+    const pct = (y: number) => (total > 0 ? `${((y / total) * 100).toFixed(1)}%` : null);
+    return (
+      <LPie
+        data={pieData}
+        angleField="y"
+        colorField="x"
+        height={height}
+        autoFit
+        label={{ text: (d: { x: string; raw: string }) => d.x, position: 'outside' }}
+        legend={{ position: 'right' }}
+        tooltip={{
+          items: [
+            (d: { x: string; y: number; raw: string }) => {
+              const value = d.raw || '—';
+              const p = pct(d.y);
+              return { name: d.x, value: p ? `${value}（占比 ${p}）` : value };
+            },
+          ],
+        }}
+      />
+    );
   }
 
   const cfg: Record<string, unknown> = {
@@ -128,15 +113,19 @@ export default function ChartView({
     smooth: type === 'line',
     // NULL 必须断开，不能连成 0，否则「没数据」看起来像「数据为 0」
     connectNulls: false,
-    stack: type !== 'line' ? !!stacked : undefined,
-    axis,
+    axis: { x: xAxis, y: yAxis },
     slider,
     tooltip,
     legend: series.length > 1 ? { position: 'top' } : false,
   };
 
-  if (type === 'column') return <LColumn {...cfg} />;
-  if (type === 'bar') return <LBar {...cfg} />;
-  if (type === 'area') return <LArea {...cfg} />;
+  if (type === 'column') {
+    // 多系列必须显式 dodge：否则每条都按整个类目宽度画，后画的盖住先画的，
+    // 看着像「只有一个颜色」。@ant-design/plots v2 不认 group 属性，只能用 transform。
+    if (series.length > 1) cfg.transform = [{ type: 'dodgeX' }];
+    // 系列少、类目也少时柱子会铺满整格，糊成一条色块，用 band padding 收窄
+    if (series.length <= 2) cfg.scale = { x: { padding: 0.6 } };
+    return <LColumn {...cfg} />;
+  }
   return <LLine {...cfg} />;
 }

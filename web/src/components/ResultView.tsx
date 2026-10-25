@@ -6,19 +6,23 @@ import {
   Button,
   Empty,
   Modal,
-  Select,
   Skeleton,
   Space,
-  Switch,
   Table,
   Tabs,
   Tag,
   Tooltip,
   Typography,
 } from 'antd';
-import { DownloadOutlined, FullscreenOutlined } from '@ant-design/icons';
+import { BulbOutlined, DownloadOutlined, FullscreenOutlined } from '@ant-design/icons';
 import type { ChartPoint, ChartType } from './ChartView';
+import { buildShape, recommend } from '../utils/chartRecommend';
+import type { ChartKind } from '../utils/chartRecommend';
+import { toNumber } from '../utils/number';
 import type { QueryResult, StringMap } from '../types';
+
+// 保持原有导出面：数值判定已挪到 utils/number，图表和推荐规则共用同一套。
+export { toNumber };
 
 // 图表库体积很大（gzip 400KB+），懒加载，不进首屏 chunk。
 // 上面的 import type 只带类型，编译后会被擦掉，不会把图表库拉进来。
@@ -28,14 +32,22 @@ const ChartView = lazy(() => import('./ChartView'));
 // 画出来没人看得懂，所以按总量取前 N 条并明确提示被截断。
 const MAX_SERIES = 12;
 
-const CHART_TYPES: Array<{ value: ChartType; label: string }> = [
-  { value: 'line', label: '折线图' },
-  { value: 'column', label: '柱状图' },
-  { value: 'bar', label: '条形图' },
-  { value: 'area', label: '面积图' },
-  { value: 'pie', label: '饼图' },
-  { value: 'dual', label: '双 Y 轴' },
+// 四个 tab：表格是默认，三个图各一种用途。不做更多类型——
+// 类型越多越要用户理解「条形图和柱状图有什么区别」，收益远小于成本。
+type TabKey = ChartKind;
+
+const CHART_TABS: Array<{ key: ChartType; label: string }> = [
+  { key: 'column', label: '柱状图' },
+  { key: 'line', label: '折线图' },
+  { key: 'pie', label: '饼图' },
 ];
+
+const KIND_LABEL: Record<ChartKind, string> = {
+  table: '表格',
+  column: '柱状图',
+  line: '折线图',
+  pie: '饼图',
+};
 
 interface Props {
   result: QueryResult | null;
@@ -66,21 +78,6 @@ function renderCell(value: unknown) {
   return String(value);
 }
 
-function display(name: string, labelMap: StringMap) {
-  return labelMap[name] ? `${labelMap[name]}（${name}）` : name;
-}
-
-// 只认真正的数字：NULL / 空串 / 非数字一律返回 null，
-// 而不是退化成 0 ——「没数」和「数为 0」在图上必须是两回事。
-export function toNumber(raw: unknown): number | null {
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
-  const s = String(raw).trim().replace(/,/g, '');
-  if (s === '' || s.toUpperCase() === 'NULL') return null;
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-}
-
 function csvCell(v: unknown): string {
   if (v === null || v === undefined) return '';
   const s = String(v);
@@ -89,12 +86,8 @@ function csvCell(v: unknown): string {
 
 export default function ResultView({ result, dims, metrics, labelMap }: Props) {
   const { message } = App.useApp();
-  const [tab, setTab] = useState<'table' | 'chart'>('table');
-  const [xField, setXField] = useState<string>('');
-  const [yFields, setYFields] = useState<string[]>([]);
-  const [groupField, setGroupField] = useState<string>('');
-  const [chartType, setChartType] = useState<ChartType>('line');
-  const [stacked, setStacked] = useState(false);
+  // 默认落在表格：查数首先是要看到数，图只是可选的呈现方式。
+  const [tab, setTab] = useState<TabKey>('table');
   const [fullscreen, setFullscreen] = useState(false);
   const chartBoxRef = useRef<HTMLDivElement>(null);
   const fullBoxRef = useRef<HTMLDivElement>(null);
@@ -123,19 +116,26 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
 
   const colNames = useMemo(() => (result?.columns ?? []).map((c) => c.name), [result]);
 
-  // 换数据源重查后，上次选的字段可能已经不在结果里了。这里做一次「有效化」：
-  // 失效就回落到第一个可用字段，避免出现一片空白的图却不给任何提示。
   const dimCols = useMemo(() => dims.filter((d) => colNames.includes(d)), [dims, colNames]);
   const metricCols = useMemo(() => metrics.filter((m) => colNames.includes(m)), [metrics, colNames]);
-  const resolvedX = xField && dimCols.includes(xField) ? xField : dimCols[0] ?? '';
-  // 没手动选过时默认全选：查询构建器里勾了哪些指标，就是想看哪些。
-  // 系列太多由 MAX_SERIES 兜底，不会把图撑爆。
-  const resolvedYs = useMemo(() => {
-    const picked = yFields.filter((m) => metricCols.includes(m));
-    return picked.length > 0 ? picked : metricCols;
-  }, [yFields, metricCols]);
-  const resolvedGroup =
-    groupField && dimCols.includes(groupField) && groupField !== resolvedX ? groupField : '';
+
+  // 图表字段完全由「查询时勾了什么」决定，不再让用户在结果区二次圈选：
+  //   第 1 个维度 → X 轴，第 2 个维度 → 分组，所有指标 → Y 轴。
+  // 想换口径回查询构建器改，避免同一份数据出现两套互相打架的字段选择。
+  const resolvedX = dimCols[0] ?? '';
+  const resolvedGroup = dimCols.find((d) => d !== resolvedX) ?? '';
+  const resolvedYs = metricCols;
+
+  // 智能推荐：只看「结果长什么样」，与后端无关，纯前端推导。
+  // 它只影响 tab 上的「推荐」标记，不会自动切走用户当前所在的 tab。
+  const shape = useMemo(
+    () =>
+      result
+        ? buildShape({ result, xField: resolvedX, groupField: resolvedGroup, yFields: resolvedYs })
+        : null,
+    [result, resolvedX, resolvedGroup, resolvedYs],
+  );
+  const recommendation = useMemo(() => (shape ? recommend(shape) : null), [shape]);
 
   const { points, series, seriesTruncated, xCount } = useMemo(() => {
     const empty = { points: [] as ChartPoint[], series: [] as string[], seriesTruncated: false, xCount: 0 };
@@ -173,24 +173,23 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     return { points: kept, series: names, seriesTruncated: truncated, xCount: new Set(kept.map((p) => p.x)).size };
   }, [result, colNames, resolvedX, resolvedYs, resolvedGroup, labelMap]);
 
-  const pieAvailable = resolvedYs.length === 1 && !resolvedGroup;
-  const dualAvailable = resolvedYs.length === 2 && !resolvedGroup;
-  // 图表类型会被引擎纠正，纠正后的值就是真正画出来的类型：
-  //   - 饼图只支持单指标不分组；双 Y 轴只支持两个指标不分组
-  //   - 没有维度时只有一个「汇总」类目，折线/面积画出来是空的，降级成柱状
-  const effectiveType: ChartType = (() => {
-    if ((chartType === 'pie' && !pieAvailable) || (chartType === 'dual' && !dualAvailable)) return 'column';
-    if (dimCols.length === 0 && (chartType === 'line' || chartType === 'area')) return 'column';
-    return chartType;
-  })();
+  // 某些图在当前字段组合下画不出来：直接把对应 tab 置灰并说明原因，
+  // 而不是让用户点进去看到一张莫名其妙的图。
+  const pieAvailable = resolvedYs.length === 1 && !resolvedGroup && xCount >= 3 && xCount <= 12;
+  const lineAvailable = dimCols.length > 0;
+  const unavailable = useMemo(() => {
+    const map: Partial<Record<ChartType, string>> = {};
+    if (!pieAvailable) map.pie = '饼图需要「单个指标、不分组」，且类目在 3~12 个之间';
+    if (!lineAvailable) map.line = '折线图至少需要一个维度才能画趋势';
+    return map;
+  }, [pieAvailable, lineAvailable]);
 
-  const chartNode = (boxRef: RefObject<HTMLDivElement>, h: number) => (
+  const chartNode = (boxRef: RefObject<HTMLDivElement>, h: number, type: ChartType) => (
     <div ref={boxRef}>
       <ChartView
         data={points}
-        type={effectiveType}
+        type={type}
         series={series}
-        stacked={stacked}
         height={h}
         xCount={xCount}
         xLabel={resolvedX ? labelMap[resolvedX] || resolvedX : '汇总'}
@@ -233,6 +232,79 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     return <Empty style={{ marginTop: 80 }} description="选择维度与指标后点击「查数」" />;
   }
 
+  // tab 标签：推荐的那一个带「推荐」角标，不可用的整项置灰并在 tooltip 里说明原因
+  const tabLabel = (key: ChartKind) => (
+    <Tooltip
+      title={
+        key === 'table'
+          ? undefined
+          : unavailable[key]
+            ? unavailable[key]
+            : recommendation?.type === key
+              ? `${recommendation.headline} · ${recommendation.reason}`
+              : undefined
+      }
+    >
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        {KIND_LABEL[key]}
+        {recommendation?.type === key && (
+          <Tag color="success" style={{ marginInlineEnd: 0, borderRadius: 999, fontSize: 11, lineHeight: '16px' }}>
+            推荐
+          </Tag>
+        )}
+      </span>
+    </Tooltip>
+  );
+
+  const chartTab = (type: ChartType) => {
+    if (unavailable[type]) {
+      return (
+        <div>
+          <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={`${KIND_LABEL[type]}当前不可用`} description={unavailable[type]} />
+          <Empty description="切回表格看原始数据，或换一个图" />
+        </div>
+      );
+    }
+    return (
+      <div>
+        <Space style={{ marginBottom: 12 }} wrap>
+          <Button size="small" icon={<FullscreenOutlined />} onClick={() => setFullscreen(true)}>
+            全屏
+          </Button>
+          <Button size="small" icon={<DownloadOutlined />} onClick={downloadPng}>
+            PNG
+          </Button>
+        </Space>
+
+        {dimCols.length === 0 && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="本次查询没有选维度，横轴按「汇总」展示各指标的值"
+          />
+        )}
+        {seriesTruncated && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`系列数为 ${series.length} 已超上限，仅展示总量最大的 ${MAX_SERIES} 个系列`}
+            description="减少指标数量或去掉分组维度可以看全"
+          />
+        )}
+
+        {series.length > 0 ? (
+          <Suspense fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
+            {chartNode(chartBoxRef, 340, type)}
+          </Suspense>
+        ) : (
+          <Empty description="画图需要至少一个指标，请在左侧勾选指标后重新查数" />
+        )}
+      </div>
+    );
+  };
+
   return (
     <div>
       <Space style={{ marginBottom: 12, justifyContent: 'space-between', display: 'flex' }} wrap>
@@ -247,13 +319,26 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
         </Button>
       </Space>
 
+      {recommendation && (
+        <Space size={6} style={{ marginBottom: 8 }} wrap>
+          <BulbOutlined style={{ color: '#d48806' }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            推荐用
+            <Typography.Text strong style={{ fontSize: 12 }}>
+              {KIND_LABEL[recommendation.type]}
+            </Typography.Text>
+            呈现：{recommendation.headline}，{recommendation.reason}
+          </Typography.Text>
+        </Space>
+      )}
+
       <Tabs
         activeKey={tab}
-        onChange={(k) => setTab(k as 'table' | 'chart')}
+        onChange={(k) => setTab(k as TabKey)}
         items={[
           {
             key: 'table',
-            label: '表格',
+            label: tabLabel('table'),
             children: (
               <Table
                 size="small"
@@ -269,114 +354,24 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
               />
             ),
           },
-          {
-            key: 'chart',
-            label: '图表',
-            children: (
-              <div>
-                <Space style={{ marginBottom: 12 }} wrap>
-                  <Select
-                    style={{ width: 150 }}
-                    placeholder="X 轴（维度）"
-                    value={resolvedX || undefined}
-                    onChange={setXField}
-                    disabled={dimCols.length === 0}
-                    options={dimCols.map((d) => ({ value: d, label: display(d, labelMap) }))}
-                  />
-                  <Select
-                    style={{ width: 150 }}
-                    allowClear
-                    placeholder="分组维度（可选）"
-                    value={resolvedGroup || undefined}
-                    onChange={(v) => setGroupField(v ?? '')}
-                    disabled={dimCols.filter((d) => d !== resolvedX).length === 0}
-                    options={dimCols
-                      .filter((d) => d !== resolvedX)
-                      .map((d) => ({ value: d, label: display(d, labelMap) }))}
-                  />
-                  <Select
-                    mode="multiple"
-                    style={{ minWidth: 180 }}
-                    placeholder="Y 轴（指标）"
-                    value={resolvedYs}
-                    onChange={setYFields}
-                    disabled={metricCols.length === 0}
-                    maxTagCount={2}
-                    options={metricCols.map((m) => ({ value: m, label: display(m, labelMap) }))}
-                  />
-                  <Select
-                    style={{ width: 120 }}
-                    value={chartType}
-                    onChange={setChartType}
-                    options={CHART_TYPES.map((t) => ({
-                      value: t.value,
-                      label: t.label,
-                      disabled:
-                        (t.value === 'pie' && !pieAvailable) || (t.value === 'dual' && !dualAvailable),
-                    }))}
-                  />
-                  {['column', 'bar', 'area'].includes(effectiveType) && (
-                    <Space size={4}>
-                      <Typography.Text type="secondary">堆叠</Typography.Text>
-                      <Switch size="small" checked={stacked} onChange={setStacked} />
-                    </Space>
-                  )}
-                  <Button size="small" icon={<FullscreenOutlined />} onClick={() => setFullscreen(true)}>
-                    全屏
-                  </Button>
-                  <Button size="small" icon={<DownloadOutlined />} onClick={downloadPng}>
-                    PNG
-                  </Button>
-                </Space>
-
-                {dimCols.length === 0 && (
-                  <Alert
-                    type="info"
-                    showIcon
-                    style={{ marginBottom: 12 }}
-                    message="本次查询没有选维度，X 轴按「汇总」展示各指标的值"
-                  />
-                )}
-                {seriesTruncated && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginBottom: 12 }}
-                    message={`系列数为 ${series.length} 已超上限，仅展示总量最大的 ${MAX_SERIES} 个系列`}
-                    description="减少指标数量或去掉分组维度可以看全"
-                  />
-                )}
-                {chartType === 'pie' && !pieAvailable && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginBottom: 12 }}
-                    message="饼图只支持单个指标且不分组，已按柱状图展示"
-                  />
-                )}
-
-                {series.length > 0 ? (
-                  <Suspense fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
-                    {chartNode(chartBoxRef, 340)}
-                  </Suspense>
-                ) : (
-                  <Empty description="图表需要至少一个指标，请在左侧勾选指标后重新查数" />
-                )}
-              </div>
-            ),
-          },
+          ...CHART_TABS.map((t) => ({
+            key: t.key,
+            label: tabLabel(t.key),
+            disabled: !!unavailable[t.key],
+            children: chartTab(t.key),
+          })),
         ]}
       />
 
       <Modal
-        open={fullscreen}
+        open={fullscreen && tab !== 'table'}
         onCancel={() => setFullscreen(false)}
         footer={null}
         width="90vw"
-        title="图表"
-        destroyOnClose
+        title={tab === 'table' ? '图表' : KIND_LABEL[tab]}
+        destroyOnHidden
       >
-        {chartNode(fullBoxRef, 520)}
+        {tab !== 'table' && chartNode(fullBoxRef, 520, tab)}
         <Space style={{ marginTop: 12 }}>
           <Button icon={<DownloadOutlined />} onClick={downloadPng}>
             导出 PNG
