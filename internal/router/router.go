@@ -10,11 +10,11 @@ import (
 	"regexp"
 	"strings"
 
-	"datasource_service/internal/config"
-	"datasource_service/internal/handler"
-	"datasource_service/internal/middleware"
-	"datasource_service/internal/query"
-	"datasource_service/internal/web"
+	"dataset_service/internal/config"
+	"dataset_service/internal/handler"
+	"dataset_service/internal/middleware"
+	"dataset_service/internal/query"
+	"dataset_service/internal/web"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -24,7 +24,8 @@ import (
 type Deps struct {
 	Config *config.Config
 	DB     *gorm.DB
-	DS     *handler.DatasourceHandler
+	DS     *handler.DatasetHandler
+	LH     *handler.LabelHandler
 	QH     *query.Handler
 }
 
@@ -46,19 +47,29 @@ func New(d Deps) *gin.Engine {
 
 	v1 := r.Group("/api/v1")
 	{
-		v1.POST("/datasources/validate", d.DS.Validate)
-		v1.GET("/datasources", d.DS.List)
-		v1.POST("/datasources", d.DS.Create)
-		v1.GET("/datasources/:key", d.DS.Get)
-		v1.PUT("/datasources/:key", d.DS.Update)
-		v1.DELETE("/datasources/:key", d.DS.Delete)
+		v1.POST("/datasets/validate", d.DS.Validate)
+		v1.GET("/datasets", d.DS.List)
+		v1.POST("/datasets", d.DS.Create)
+		v1.GET("/datasets/:key", d.DS.Get)
+		v1.PUT("/datasets/:key", d.DS.Update)
+		v1.DELETE("/datasets/:key", d.DS.Delete)
 
-		// 查询页可选的数据源，已按登录态租户过滤
-		v1.GET("/query/datasources", d.QH.Datasources)
+		// 全局字段名称定义（对所有数据集生效的「字段名 → 中文名」字典）
+		v1.GET("/labels", d.LH.List)
+		v1.POST("/labels", d.LH.Create)
+		v1.GET("/labels/:key", d.LH.Get)
+		v1.PUT("/labels/:key", d.LH.Update)
+		v1.DELETE("/labels/:key", d.LH.Delete)
+		// 全量字典，供数据集编辑页显示「继承：XXX」。
+		// 刻意不挂在 /labels 下：/labels/:key 的通配段会与同级静态段冲突。
+		v1.GET("/label-map", d.LH.Map)
+
+		// 查询页可选的数据集，已按登录态租户过滤
+		v1.GET("/query/datasets", d.QH.Datasets)
 		// 查询只暴露一个执行接口：前端传「查询意图」，SQL 由后端生成，用户不感知。
 		v1.POST("/query/execute", d.QH.Execute)
 		// 维度候选值，供前端下拉枚举
-		v1.GET("/datasources/:key/dim-values", d.QH.DimValues)
+		v1.GET("/datasets/:key/dim-values", d.QH.DimValues)
 	}
 
 	source := mountSPA(r, d.Config.StaticDir)

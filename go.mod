@@ -1,4 +1,4 @@
-module datasource_service
+module dataset_service
 
 go 1.26.2
 

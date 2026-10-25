@@ -72,23 +72,23 @@ type OrderBy struct {
 // ExecuteRequest 是「查询意图」，不是 SQL。
 // 前端只描述想看什么，SQL 完全由后端生成，用户不感知 SQL 的存在。
 type ExecuteRequest struct {
-	DatasourceKey string      `json:"datasource_key"`
-	Dims          []string    `json:"dims"`
-	Metrics       []string    `json:"metrics"`
-	Filter        *FilterNode `json:"filter"`
-	OrderBy       []OrderBy   `json:"order_by"`
-	Limit         int         `json:"limit"`
+	DatasetKey string      `json:"dataset_key"`
+	Dims       []string    `json:"dims"`
+	Metrics    []string    `json:"metrics"`
+	Filter     *FilterNode `json:"filter"`
+	OrderBy    []OrderBy   `json:"order_by"`
+	Limit      int         `json:"limit"`
 }
 
-// QueryDatasource 是查询页看到的数据源。
+// QueryDataset 是查询页看到的数据集。
 // 刻意不含 mid_sql（用户不感知 SQL）与 acl（没必要把别人的租户名下发给浏览器）。
 // dim_map / mtx_map 已按列级白名单过滤，看不到的列不会出现在下拉里。
-type QueryDatasource struct {
-	DatasourceKey  string            `json:"datasource_key"`
-	DatasourceName string            `json:"datasource_name"`
-	DimMap         map[string]string `json:"dim_map"`
-	MtxMap         map[string]string `json:"mtx_map"`
-	LabelMap       map[string]string `json:"label_map"`
+type QueryDataset struct {
+	DatasetKey  string            `json:"dataset_key"`
+	DatasetName string            `json:"dataset_name"`
+	DimMap      map[string]string `json:"dim_map"`
+	MtxMap      map[string]string `json:"mtx_map"`
+	LabelMap    map[string]string `json:"label_map"`
 }
 
 // Column 结果列元信息。

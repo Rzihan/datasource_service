@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"datasource_service/internal/config"
-	"datasource_service/internal/model"
-	"datasource_service/internal/repo"
+	"dataset_service/internal/config"
+	"dataset_service/internal/model"
+	"dataset_service/internal/repo"
 )
 
 // 日志里 SQL 的上限。mid_sql 最长 1 MiB，全量打进日志会把日志撑爆，
@@ -38,55 +38,105 @@ func formatParams(params []Param) string {
 	return strings.Join(parts, ", ")
 }
 
+// LabelProvider 提供全局字段名称字典（field_key → 中文名）。
+//
+// 定义成接口而不是直接依赖 service.LabelService：query 包只用到「查字典」这一个能力，
+// 用接口把它隔离开，避免查询链路顺带依赖上数据集 CRUD 的一整套规则。
+// 实现侧带进程内缓存，这里可以放心地每次调用。
+type LabelProvider interface {
+	Map(ctx context.Context) map[string]string
+}
+
 // Service 查询业务层：取配置 → 组装 SQL → 执行 → 记日志。
 type Service struct {
-	repo    *repo.DatasourceRepo
+	repo    *repo.DatasetRepo
 	engine  Engine
+	labels  LabelProvider
 	cfg     config.QueryConfig
 	timeout time.Duration
 	sem     chan struct{} // 并发闸门
 }
 
-// NewService 构造查询服务。
-func NewService(r *repo.DatasourceRepo, e Engine, cfg config.QueryConfig, timeout time.Duration) *Service {
+// NewService 构造查询服务。labels 可为 nil，此时只使用数据集自己的 label_map。
+func NewService(r *repo.DatasetRepo, e Engine, labels LabelProvider, cfg config.QueryConfig, timeout time.Duration) *Service {
 	return &Service{
 		repo:    r,
 		engine:  e,
+		labels:  labels,
 		cfg:     cfg,
 		timeout: timeout,
 		sem:     make(chan struct{}, cfg.MaxConcurrency),
 	}
 }
 
-// ErrForbidden 表示当前登录态的租户看不到该数据源。handler 映射为 403。
+// ErrForbidden 表示当前登录态的租户看不到该数据集。handler 映射为 403。
 var ErrForbidden = errors.New("forbidden")
 
-// VisibleDatasources 返回当前登录态可见的数据源。
+// VisibleDatasets 返回当前登录态可见的数据集。
 //
-// 可见性规则：数据源的租户白名单为空 = 不限制（所有租户可见）；
+// 可见性规则：数据集的租户白名单为空 = 不限制（所有租户可见）；
 // 非空 = 登录态租户与白名单有交集才可见。
-func (s *Service) VisibleDatasources(ctx context.Context, tenants []string) ([]QueryDatasource, error) {
+func (s *Service) VisibleDatasets(ctx context.Context, tenants []string) ([]QueryDataset, error) {
 	items, err := s.repo.ListAvailable(ctx, 0)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]QueryDatasource, 0, len(items))
+	// 全局字典只在这里取一次，循环内复用；取不到时降级为空字典（展示回落到字段名）。
+	global := map[string]string{}
+	if s.labels != nil {
+		global = s.labels.Map(ctx)
+	}
+	out := make([]QueryDataset, 0, len(items))
 	for _, it := range items {
 		if !it.ACL.Allows(tenants) {
 			continue
 		}
 		dims := filterColumns(it.DimMap, it.ACL, tenants)
 		mtxs := filterColumns(it.MtxMap, it.ACL, tenants)
-		out = append(out, QueryDatasource{
-			DatasourceKey:  it.DatasourceKey,
-			DatasourceName: it.DatasourceName,
-			DimMap:         dims,
-			MtxMap:         mtxs,
-			// label_map 只保留还看得见的列，避免表头里出现用不到的中文名
-			LabelMap: filterColumns(it.LabelMap, it.ACL, tenants),
+		out = append(out, QueryDataset{
+			DatasetKey:  it.DatasetKey,
+			DatasetName: it.DatasetName,
+			DimMap:      dims,
+			MtxMap:      mtxs,
+			// 只对「当前数据集真的有、且当前登录态看得见」的列生成中文名：
+			// 以 dim_map / mtx_map 为准而不是以 label_map 为准，
+			// 否则数据集里已经删掉的列、或全局字典里跟本数据集无关的字段都会混进表头。
+			LabelMap: mergeLabels(dims, mtxs, it.LabelMap, global),
 		})
 	}
 	return out, nil
+}
+
+// mergeLabels 合并三层命名：数据集覆盖 → 全局定义 → 字段名兜底。
+//
+// 三态是这里的关键，覆盖层的「没有这个 key」和「显式空串」必须区分开：
+//   - 覆盖层没有 key            → 继承全局定义
+//   - 覆盖层非空                → 覆盖，只作用于本数据集
+//   - 覆盖层是 ""（显式空串）   → 明确「不使用中文名」，即使全局有定义也不继承
+//     （典型场景：本数据集的同名字段与全局语义不同，又不想另起一个名字）
+//
+// 兜底由前端完成：map 里没有的字段，前端直接显示字段名本身，这里不写空值。
+func mergeLabels(dims, mtxs, override, global map[string]string) map[string]string {
+	out := make(map[string]string, len(dims)+len(mtxs))
+	put := func(k string) {
+		if v, ok := override[k]; ok {
+			// 命中覆盖层：空串也是有意义的显式声明，直接跳过不写
+			if v != "" {
+				out[k] = v
+			}
+			return
+		}
+		if v := global[k]; v != "" {
+			out[k] = v
+		}
+	}
+	for k := range dims {
+		put(k)
+	}
+	for k := range mtxs {
+		put(k)
+	}
+	return out
 }
 
 // filterColumns 按列级白名单过滤。键名就是维度/指标名，与 label_map 的键一致。
@@ -101,12 +151,12 @@ func filterColumns(m map[string]string, acl model.ACL, tenants []string) map[str
 	return out
 }
 
-// buildRowFilters 根据数据源配置与登录态合成行级权限条件。
+// buildRowFilters 根据数据集配置与登录态合成行级权限条件。
 //
 // 列表达式只从服务端持有的 dim_map 里取，绝不采信客户端传入的文本。
 // 开启但登录态列表为空时保留空 Values：IN () 不匹配任何行，等价于拒绝——
 // 权限配置宁可看不到，也不能看到别人的数据。
-func buildRowFilters(ds *model.DatasourceConfig, tenants, users []string) []RowFilter {
+func buildRowFilters(ds *model.DatasetConfig, tenants, users []string) []RowFilter {
 	rf := ds.ACL.RowFilter
 	var out []RowFilter
 	if rf.Tenant.Enabled {
@@ -134,16 +184,16 @@ func ensureColumnsVisible(acl model.ACL, tenants []string, cols ...string) error
 
 // Execute 执行一次查询。
 func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator string, tenants, users []string) (*ExecuteResult, error) {
-	ds, err := s.repo.GetByKey(ctx, req.DatasourceKey)
+	ds, err := s.repo.GetByKey(ctx, req.DatasetKey)
 	if err != nil {
 		return nil, err
 	}
 	if !ds.ACL.Allows(tenants) {
 		slog.Warn("query denied by tenant acl",
-			"operator", operator, "datasource_key", ds.DatasourceKey,
+			"operator", operator, "dataset_key", ds.DatasetKey,
 			"tenants", tenants, "acl_tenants", ds.ACL.Tenants,
 		)
-		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问数据源 %q", ErrForbidden, ds.DatasourceKey)
+		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问数据集 %q", ErrForbidden, ds.DatasetKey)
 	}
 	// 列级管控：维度、指标，以及过滤条件里引用到的字段都要校验。
 	// 过滤条件尤其容易漏——它可以引用没被选为维度的列。
@@ -175,18 +225,18 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 	}
 
 	sqlText, params, err := Build(Spec{
-		DatasourceKey: ds.DatasourceKey,
-		MidSQL:        midSQL,
-		DimMap:        ds.DimMap,
-		MtxMap:        ds.MtxMap,
-		Dims:          req.Dims,
-		Metrics:       req.Metrics,
-		Filter:        req.Filter,
-		RowFilters:    buildRowFilters(ds, tenants, users),
-		OrderBy:       req.OrderBy,
-		Limit:         req.Limit,
-		MaxLimit:      s.cfg.MaxResultRows,
-		DefaultLimit:  s.cfg.DefaultLimit,
+		DatasetKey:   ds.DatasetKey,
+		MidSQL:       midSQL,
+		DimMap:       ds.DimMap,
+		MtxMap:       ds.MtxMap,
+		Dims:         req.Dims,
+		Metrics:      req.Metrics,
+		Filter:       req.Filter,
+		RowFilters:   buildRowFilters(ds, tenants, users),
+		OrderBy:      req.OrderBy,
+		Limit:        req.Limit,
+		MaxLimit:     s.cfg.MaxResultRows,
+		DefaultLimit: s.cfg.DefaultLimit,
 	})
 	if err != nil {
 		return nil, err
@@ -210,7 +260,7 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 	if err != nil {
 		// SQL 只进日志，不回给前端——用户不感知 SQL，出错时拿 request_id 来查。
 		slog.Error("query failed",
-			"operator", operator, "datasource_key", ds.DatasourceKey,
+			"operator", operator, "dataset_key", ds.DatasetKey,
 			"dims", req.Dims, "metrics", req.Metrics,
 			"elapsed_ms", elapsed, "error", err,
 			"sql", loggableSQL(sqlText), "params", formatParams(params),
@@ -222,7 +272,7 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 	// 成功也把 SQL 打出来：日常排查「这个数是怎么算出来的」主要靠这条日志，
 	// 行级权限注入的条件也只在这里能看到全貌。
 	slog.Info("query executed",
-		"operator", operator, "datasource_key", ds.DatasourceKey,
+		"operator", operator, "dataset_key", ds.DatasetKey,
 		"dims", req.Dims, "metrics", req.Metrics, "filters", FilterNodeCount(req.Filter),
 		"rows", res.RowCount, "truncated", res.Truncated, "elapsed_ms", elapsed,
 		"sql", loggableSQL(sqlText), "params", formatParams(params),
@@ -231,20 +281,20 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 }
 
 // DimValues 返回某个维度的候选值，供前端下拉枚举。
-func (s *Service) DimValues(ctx context.Context, datasourceKey, field string, tenants, users []string) ([]string, error) {
-	ds, err := s.repo.GetByKey(ctx, datasourceKey)
+func (s *Service) DimValues(ctx context.Context, datasetKey, field string, tenants, users []string) ([]string, error) {
+	ds, err := s.repo.GetByKey(ctx, datasetKey)
 	if err != nil {
 		return nil, err
 	}
 	if !ds.ACL.Allows(tenants) {
-		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问数据源 %q", ErrForbidden, datasourceKey)
+		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问数据集 %q", ErrForbidden, datasetKey)
 	}
 	if !ds.ACL.AllowsColumn(field, tenants) {
 		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问列 %q", ErrForbidden, field)
 	}
 	expr, ok := ds.DimMap[field]
 	if !ok {
-		return nil, fmt.Errorf("%w: 字段 %q 不是该数据源的维度", ErrInvalidQuery, field)
+		return nil, fmt.Errorf("%w: 字段 %q 不是该数据集的维度", ErrInvalidQuery, field)
 	}
 
 	// 候选值查询只用到一个维度列，但行级权限的列也要参与渲染判断
@@ -273,11 +323,11 @@ func (s *Service) DimValues(ctx context.Context, datasourceKey, field string, te
 
 	res, err := s.engine.Query(queryCtx, sqlText, params)
 	if err != nil {
-		slog.Error("dim values query failed", "datasource_key", datasourceKey, "field", field,
+		slog.Error("dim values query failed", "dataset_key", datasetKey, "field", field,
 			"error", err, "sql", loggableSQL(sqlText), "params", formatParams(params))
 		return nil, err
 	}
-	slog.Info("dim values query executed", "datasource_key", datasourceKey, "field", field,
+	slog.Info("dim values query executed", "dataset_key", datasetKey, "field", field,
 		"rows", len(res.Rows), "sql", loggableSQL(sqlText), "params", formatParams(params))
 
 	values := make([]string, 0, len(res.Rows))

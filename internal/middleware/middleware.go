@@ -57,7 +57,7 @@ const (
 // Tenants 解析当前登录态所属的租户，来自 X-Tenants 请求头（逗号分隔，支持多租户）。
 //
 // 与 Operator 同一套思路：系统不接鉴权，租户由调用方自报，
-// 只用于判断数据源对当前登录态是否可见，不作为安全边界。
+// 只用于判断数据集对当前登录态是否可见，不作为安全边界。
 func Tenants(header string) gin.HandlerFunc {
 	if header == "" {
 		header = "X-Tenants"

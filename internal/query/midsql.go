@@ -137,7 +137,7 @@ func RenderMidSQL(text string, data MidSQLData) (string, error) {
 	return w.String(), nil
 }
 
-// 模板解析不便宜，按内容哈希缓存。数据源是千行量级，条目数可控；
+// 模板解析不便宜，按内容哈希缓存。数据集是千行量级，条目数可控；
 // 超过上限直接整体清空，避免配置反复修改把内存堆上去。
 var (
 	midSQLTemplates sync.Map

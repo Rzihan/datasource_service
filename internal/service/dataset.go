@@ -10,14 +10,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"datasource_service/internal/model"
-	"datasource_service/internal/repo"
+	"dataset_service/internal/model"
+	"dataset_service/internal/repo"
 )
 
 // ErrInvalid 表示入参不合法，handler 会将其映射为 400。
 var ErrInvalid = errors.New("invalid argument")
 
-// datasource_key 的合法格式：小写字母/数字开头，允许下划线、短横线、点号。
+// dataset_key 的合法格式：小写字母/数字开头，允许下划线、短横线、点号。
 // 之所以强制小写，是因为 MySQL 默认 collation (utf8mb4_0900_ai_ci) 不区分大小写，
 // 若允许大小写混用，Order_DS 与 order_ds 会被判定为同一条而误报冲突。
 var keyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.\-]{1,63}$`)
@@ -30,24 +30,24 @@ const (
 	maxTenantCount = 64
 )
 
-// DatasourceService 承载业务规则与入参校验。
-type DatasourceService struct {
-	repo        *repo.DatasourceRepo
+// DatasetService 承载业务规则与入参校验。
+type DatasetService struct {
+	repo        *repo.DatasetRepo
 	maxSQLBytes int
 }
 
-// NewDatasourceService 构造 service。
-func NewDatasourceService(r *repo.DatasourceRepo, maxSQLBytes int) *DatasourceService {
-	return &DatasourceService{repo: r, maxSQLBytes: maxSQLBytes}
+// NewDatasetService 构造 service。
+func NewDatasetService(r *repo.DatasetRepo, maxSQLBytes int) *DatasetService {
+	return &DatasetService{repo: r, maxSQLBytes: maxSQLBytes}
 }
 
-// Create 新建配置。datasource_key 会被规范化为小写。
-func (s *DatasourceService) Create(ctx context.Context, req *model.CreateRequest, operator string) (*model.DatasourceConfig, error) {
-	key, err := normalizeKey(req.DatasourceKey)
+// Create 新建配置。dataset_key 会被规范化为小写。
+func (s *DatasetService) Create(ctx context.Context, req *model.CreateRequest, operator string) (*model.DatasetConfig, error) {
+	key, err := normalizeKey(req.DatasetKey)
 	if err != nil {
 		return nil, err
 	}
-	name, err := normalizeName(req.DatasourceName)
+	name, err := normalizeName(req.DatasetName)
 	if err != nil {
 		return nil, err
 	}
@@ -79,20 +79,20 @@ func (s *DatasourceService) Create(ctx context.Context, req *model.CreateRequest
 	}
 
 	now := time.Now()
-	m := &model.DatasourceConfig{
-		DatasourceKey:  key,
-		DatasourceName: name,
-		MidSQL:         req.MidSQL,
-		DimMap:         dimMap,
-		MtxMap:         mtxMap,
-		LabelMap:       labelMap,
-		ACL:            acl,
-		Status:         status,
-		Version:        0,
-		CreatedBy:      operator,
-		UpdatedBy:      operator,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+	m := &model.DatasetConfig{
+		DatasetKey:  key,
+		DatasetName: name,
+		MidSQL:      req.MidSQL,
+		DimMap:      dimMap,
+		MtxMap:      mtxMap,
+		LabelMap:    labelMap,
+		ACL:         acl,
+		Status:      status,
+		Version:     0,
+		CreatedBy:   operator,
+		UpdatedBy:   operator,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	if err := s.repo.Create(ctx, m); err != nil {
 		return nil, err
@@ -101,7 +101,7 @@ func (s *DatasourceService) Create(ctx context.Context, req *model.CreateRequest
 }
 
 // Get 查询单条配置。
-func (s *DatasourceService) Get(ctx context.Context, key string) (*model.DatasourceConfig, error) {
+func (s *DatasetService) Get(ctx context.Context, key string) (*model.DatasetConfig, error) {
 	key, err := normalizeKey(key)
 	if err != nil {
 		return nil, err
@@ -110,7 +110,7 @@ func (s *DatasourceService) Get(ctx context.Context, key string) (*model.Datasou
 }
 
 // List 分页查询，并在此兜底修正分页参数。
-func (s *DatasourceService) List(ctx context.Context, q model.ListQuery) (*model.ListResult, error) {
+func (s *DatasetService) List(ctx context.Context, q model.ListQuery) (*model.ListResult, error) {
 	if q.Page <= 0 {
 		q.Page = 1
 	}
@@ -128,12 +128,12 @@ func (s *DatasourceService) List(ctx context.Context, q model.ListQuery) (*model
 }
 
 // Update 全量更新，带乐观锁。
-func (s *DatasourceService) Update(ctx context.Context, key string, req *model.UpdateRequest, operator string) (*model.DatasourceConfig, error) {
+func (s *DatasetService) Update(ctx context.Context, key string, req *model.UpdateRequest, operator string) (*model.DatasetConfig, error) {
 	key, err := normalizeKey(key)
 	if err != nil {
 		return nil, err
 	}
-	name, err := normalizeName(req.DatasourceName)
+	name, err := normalizeName(req.DatasetName)
 	if err != nil {
 		return nil, err
 	}
@@ -164,16 +164,16 @@ func (s *DatasourceService) Update(ctx context.Context, key string, req *model.U
 		}
 	}
 
-	m := &model.DatasourceConfig{
-		DatasourceKey:  key,
-		DatasourceName: name,
-		MidSQL:         req.MidSQL,
-		DimMap:         dimMap,
-		MtxMap:         mtxMap,
-		LabelMap:       labelMap,
-		ACL:            acl,
-		Status:         status,
-		UpdatedBy:      operator,
+	m := &model.DatasetConfig{
+		DatasetKey:  key,
+		DatasetName: name,
+		MidSQL:      req.MidSQL,
+		DimMap:      dimMap,
+		MtxMap:      mtxMap,
+		LabelMap:    labelMap,
+		ACL:         acl,
+		Status:      status,
+		UpdatedBy:   operator,
 	}
 	if err := s.repo.Update(ctx, m, req.Version); err != nil {
 		return nil, err
@@ -182,7 +182,7 @@ func (s *DatasourceService) Update(ctx context.Context, key string, req *model.U
 }
 
 // Delete 软删除。
-func (s *DatasourceService) Delete(ctx context.Context, key, operator string) error {
+func (s *DatasetService) Delete(ctx context.Context, key, operator string) error {
 	key, err := normalizeKey(key)
 	if err != nil {
 		return err
@@ -192,7 +192,7 @@ func (s *DatasourceService) Delete(ctx context.Context, key, operator string) er
 
 // Validate 只做结构与长度校验，不落库。供前端在提交前实时调用。
 // 注意：按约定，mid_sql 不做语法或语义校验。
-func (s *DatasourceService) Validate(ctx context.Context, req *model.ValidateRequest) error {
+func (s *DatasetService) Validate(ctx context.Context, req *model.ValidateRequest) error {
 	if _, err := normalizeStringMap(req.DimMap, "dim_map"); err != nil {
 		return err
 	}
@@ -210,7 +210,7 @@ func (s *DatasourceService) Validate(ctx context.Context, req *model.ValidateReq
 
 // checkMidSQL 只校验长度。mid_sql 的内容不做任何语法或语义校验（按需求约定）。
 // 这里的长度上限是防滥用：避免有人把超大文本塞进配置表把存储撑爆。
-func (s *DatasourceService) checkMidSQL(sql string) error {
+func (s *DatasetService) checkMidSQL(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("%w: mid_sql must not be empty", ErrInvalid)
 	}
@@ -248,7 +248,7 @@ func normalizeTenantList(in []string, field string) ([]string, error) {
 // normalizeACL 校验并归一化访问控制：
 //   - 租户列表去空白、去重、排序；空列表一律落成 {} 而不是 {"tenants":null}
 //     ——null 会被 JSON 函数当成「有一个元素」，把「不限制」误判成「受限」
-//   - col_tenants 的 key 必须是该数据源 dim_map / mtx_map 的键：
+//   - col_tenants 的 key 必须是该数据集 dim_map / mtx_map 的键：
 //     拼错 key 会让该列静默保持可见（权限配置 fail-open），所以必须挡住并报清楚
 func normalizeACL(a model.ACL, dimMap, mtxMap map[string]string) (model.ACL, error) {
 	tenants, err := normalizeTenantList(a.Tenants, "acl.tenants")
@@ -265,7 +265,7 @@ func normalizeACL(a model.ACL, dimMap, mtxMap map[string]string) (model.ACL, err
 		_, isDim := dimMap[col]
 		_, isMtx := mtxMap[col]
 		if !isDim && !isMtx {
-			return model.ACL{}, fmt.Errorf("%w: acl.col_tenants 的 %q 不是该数据源的维度或指标", ErrInvalid, col)
+			return model.ACL{}, fmt.Errorf("%w: acl.col_tenants 的 %q 不是该数据集的维度或指标", ErrInvalid, col)
 		}
 		norm, err := normalizeTenantList(list, fmt.Sprintf("acl.col_tenants[%q]", col))
 		if err != nil {
@@ -301,7 +301,7 @@ func normalizeRowFilter(r model.RowFilter, dimMap map[string]string) (model.RowF
 			return model.RowRule{}, fmt.Errorf("%w: %s 已开启但 column 为空", ErrInvalid, field)
 		}
 		if _, ok := dimMap[col]; !ok {
-			return model.RowRule{}, fmt.Errorf("%w: %s 的 column %q 必须是该数据源 dim_map 里的维度（行级过滤发生在聚合前，不能映射到指标）", ErrInvalid, field, col)
+			return model.RowRule{}, fmt.Errorf("%w: %s 的 column %q 必须是该数据集 dim_map 里的维度（行级过滤发生在聚合前，不能映射到指标）", ErrInvalid, field, col)
 		}
 		return model.RowRule{Enabled: true, Column: col}, nil
 	}
@@ -320,10 +320,10 @@ func normalizeRowFilter(r model.RowFilter, dimMap map[string]string) (model.RowF
 func normalizeKey(raw string) (string, error) {
 	key := strings.ToLower(strings.TrimSpace(raw))
 	if key == "" {
-		return "", fmt.Errorf("%w: datasource_key must not be empty", ErrInvalid)
+		return "", fmt.Errorf("%w: dataset_key must not be empty", ErrInvalid)
 	}
 	if !keyPattern.MatchString(key) {
-		return "", fmt.Errorf("%w: datasource_key %q must match %s", ErrInvalid, raw, keyPattern.String())
+		return "", fmt.Errorf("%w: dataset_key %q must match %s", ErrInvalid, raw, keyPattern.String())
 	}
 	return key, nil
 }
@@ -331,10 +331,10 @@ func normalizeKey(raw string) (string, error) {
 func normalizeName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
 	if name == "" {
-		return "", fmt.Errorf("%w: datasource_name must not be empty", ErrInvalid)
+		return "", fmt.Errorf("%w: dataset_name must not be empty", ErrInvalid)
 	}
 	if utf8.RuneCountInString(name) > maxNameLen {
-		return "", fmt.Errorf("%w: datasource_name exceeds %d characters", ErrInvalid, maxNameLen)
+		return "", fmt.Errorf("%w: dataset_name exceeds %d characters", ErrInvalid, maxNameLen)
 	}
 	return name, nil
 }

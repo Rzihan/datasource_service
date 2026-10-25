@@ -33,5 +33,5 @@ FROM numbers(5000);
 CREATE USER IF NOT EXISTS reader IDENTIFIED WITH plaintext_password BY 'reader_pass';
 GRANT SELECT ON demo.* TO reader;
 
--- 演示用的 datasource 配置也可以直接写 MySQL，但那属于另一个库，
+-- 演示用的 dataset 配置也可以直接写 MySQL，但那属于另一个库，
 -- 这里只管 ClickHouse 侧的表和数据。

@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
-	"datasource_service/internal/config"
-	"datasource_service/internal/handler"
-	"datasource_service/internal/query"
-	"datasource_service/internal/repo"
-	"datasource_service/internal/router"
-	"datasource_service/internal/service"
+	"dataset_service/internal/config"
+	"dataset_service/internal/handler"
+	"dataset_service/internal/query"
+	"dataset_service/internal/repo"
+	"dataset_service/internal/router"
+	"dataset_service/internal/service"
 
 	"gorm.io/gorm"
 )
@@ -57,14 +57,17 @@ func main() {
 		slog.Warn("clickhouse is not reachable, query feature will fail until it recovers", "error", err)
 	}
 
-	dsHandler := handler.NewDatasourceHandler(
-		service.NewDatasourceService(repo.NewDatasourceRepo(db), cfg.MaxSQLBytes),
+	dsHandler := handler.NewDatasetHandler(
+		service.NewDatasetService(repo.NewDatasetRepo(db), cfg.MaxSQLBytes),
 	)
+	// 全局字段名称字典。它同时喂给两个地方：自己的 CRUD 接口，以及查询侧的命名合并。
+	labelSvc := service.NewLabelService(repo.NewLabelRepo(db), 0)
+	labelHandler := handler.NewLabelHandler(labelSvc)
 	queryHandler := query.NewHandler(query.NewService(
-		repo.NewDatasourceRepo(db), chEngine, cfg.Query,
+		repo.NewDatasetRepo(db), chEngine, labelSvc, cfg.Query,
 		time.Duration(cfg.CH.QueryTimeoutSeconds)*time.Second,
 	))
-	engine := router.New(router.Deps{Config: cfg, DB: db, DS: dsHandler, QH: queryHandler})
+	engine := router.New(router.Deps{Config: cfg, DB: db, DS: dsHandler, LH: labelHandler, QH: queryHandler})
 
 	srv := &http.Server{
 		Addr:              ":" + itoa(cfg.HTTPPort),

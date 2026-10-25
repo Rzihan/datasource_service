@@ -3,20 +3,20 @@ import { App, Button, Input, Popconfirm, Space, Table, Tag, Tooltip, Typography 
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
-import { deleteDatasource, fetchList } from '../api';
+import { deleteDataset, fetchList } from '../api';
 import EditDrawer from '../components/EditDrawer';
-import type { DatasourceConfig } from '../types';
+import type { DatasetConfig } from '../types';
 
-export default function DatasourceList() {
+export default function DatasetList() {
   const { message } = App.useApp();
-  const [items, setItems] = useState<DatasourceConfig[]>([]);
+  const [items, setItems] = useState<DatasetConfig[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(20);
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editing, setEditing] = useState<DatasourceConfig | null>(null);
+  const [editing, setEditing] = useState<DatasetConfig | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -40,29 +40,29 @@ export default function DatasourceList() {
     setDrawerOpen(true);
   };
 
-  const onEdit = (record: DatasourceConfig) => {
+  const onEdit = (record: DatasetConfig) => {
     setEditing(record);
     setDrawerOpen(true);
   };
 
-  const onDelete = async (record: DatasourceConfig) => {
+  const onDelete = async (record: DatasetConfig) => {
     try {
-      await deleteDatasource(record.datasource_key);
-      message.success(`已删除 ${record.datasource_key}`);
+      await deleteDataset(record.dataset_key);
+      message.success(`已删除 ${record.dataset_key}`);
       void load();
     } catch (e) {
       message.error((e as Error).message || '删除失败');
     }
   };
 
-  const columns: ColumnsType<DatasourceConfig> = [
+  const columns: ColumnsType<DatasetConfig> = [
     {
-      title: 'datasource_key',
-      dataIndex: 'datasource_key',
+      title: 'dataset_key',
+      dataIndex: 'dataset_key',
       width: 200,
       render: (v: string) => <Typography.Text code copyable={{ text: v }}>{v}</Typography.Text>,
     },
-    { title: 'datasource_name', dataIndex: 'datasource_name', width: 180 },
+    { title: 'dataset_name', dataIndex: 'dataset_name', width: 180 },
     {
       title: '状态',
       dataIndex: 'status',
@@ -86,7 +86,7 @@ export default function DatasourceList() {
       title: '权限管控',
       dataIndex: 'acl',
       width: 220,
-      render: (acl: DatasourceConfig['acl']) => {
+      render: (acl: DatasetConfig['acl']) => {
         const list = acl?.tenants ?? [];
         const cols = Object.keys(acl?.col_tenants ?? {});
         const rows = (['tenant', 'user'] as const)
@@ -99,7 +99,7 @@ export default function DatasourceList() {
           <Space direction="vertical" size={2}>
             {list.length > 0 && (
               <Space size={4} wrap>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>数据源</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>数据集</Typography.Text>
                 {list.map((t) => (
                   <Tag key={t} color="blue">{t}</Tag>
                 ))}
@@ -157,13 +157,13 @@ export default function DatasourceList() {
       title: '操作',
       width: 140,
       fixed: 'right',
-      render: (_: unknown, record: DatasourceConfig) => (
+      render: (_: unknown, record: DatasetConfig) => (
         <Space size="small">
           <Button type="link" size="small" onClick={() => onEdit(record)}>
             编辑
           </Button>
           <Popconfirm
-            title={`确认删除 ${record.datasource_key}？`}
+            title={`确认删除 ${record.dataset_key}？`}
             description="软删除，配置会从列表移除。"
             okText="删除"
             cancelText="取消"
@@ -199,7 +199,7 @@ export default function DatasourceList() {
       </Space>
 
       <Table
-        rowKey="datasource_key"
+        rowKey="dataset_key"
         loading={loading}
         columns={columns}
         dataSource={items}

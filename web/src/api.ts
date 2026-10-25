@@ -1,18 +1,23 @@
 import axios from 'axios';
 import type {
   CreatePayload,
-  DatasourceConfig,
+  DatasetConfig,
+  GlobalLabel,
+  LabelCreatePayload,
+  LabelListResult,
+  LabelUpdatePayload,
   ListResult,
-  QueryDatasource,
+  QueryDataset,
   QueryRequest,
   QueryResult,
+  StringMap,
   UpdatePayload,
 } from './types';
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 20000 });
 
 // 系统不接鉴权：操作人来自本地填写的用户名，租户 / 可见用户来自本地选择的列表，
-// 三者都随请求头带给后端，分别用于审计、数据源级可见性与行级过滤。
+// 三者都随请求头带给后端，分别用于审计、数据集级可见性与行级过滤。
 // 注意这几个头由服务端读取，客户端传什么就按什么过滤——真实环境必须由网关覆盖。
 http.interceptors.request.use((config) => {
   config.headers['X-User'] = localStorage.getItem('ds_operator') || 'system';
@@ -34,28 +39,28 @@ async function unwrap<T>(promise: Promise<{ data: { code: number; message: strin
 }
 
 export function fetchList(params: { page: number; size: number; keyword?: string }): Promise<ListResult> {
-  return unwrap(http.get('/datasources', { params }));
+  return unwrap(http.get('/datasets', { params }));
 }
 
-export function fetchOne(key: string): Promise<DatasourceConfig> {
-  return unwrap(http.get(`/datasources/${encodeURIComponent(key)}`));
+export function fetchOne(key: string): Promise<DatasetConfig> {
+  return unwrap(http.get(`/datasets/${encodeURIComponent(key)}`));
 }
 
-export function createDatasource(payload: CreatePayload): Promise<DatasourceConfig> {
-  return unwrap(http.post('/datasources', payload));
+export function createDataset(payload: CreatePayload): Promise<DatasetConfig> {
+  return unwrap(http.post('/datasets', payload));
 }
 
-export function updateDatasource(key: string, payload: UpdatePayload): Promise<DatasourceConfig> {
-  return unwrap(http.put(`/datasources/${encodeURIComponent(key)}`, payload));
+export function updateDataset(key: string, payload: UpdatePayload): Promise<DatasetConfig> {
+  return unwrap(http.put(`/datasets/${encodeURIComponent(key)}`, payload));
 }
 
-export function deleteDatasource(key: string): Promise<unknown> {
-  return unwrap(http.delete(`/datasources/${encodeURIComponent(key)}`));
+export function deleteDataset(key: string): Promise<unknown> {
+  return unwrap(http.delete(`/datasets/${encodeURIComponent(key)}`));
 }
 
-// 查询页的数据源列表：已按请求头里的租户过滤，且不含 mid_sql
-export function fetchQueryDatasources(): Promise<{ items: QueryDatasource[] }> {
-  return unwrap(http.get('/query/datasources'));
+// 查询页的数据集列表：已按请求头里的租户过滤，且不含 mid_sql
+export function fetchQueryDatasets(): Promise<{ items: QueryDataset[] }> {
+  return unwrap(http.get('/query/datasets'));
 }
 
 export function executeQuery(payload: QueryRequest): Promise<QueryResult> {
@@ -63,5 +68,30 @@ export function executeQuery(payload: QueryRequest): Promise<QueryResult> {
 }
 
 export function fetchDimValues(key: string, field: string): Promise<{ field: string; values: string[] }> {
-  return unwrap(http.get(`/datasources/${encodeURIComponent(key)}/dim-values`, { params: { field } }));
+  return unwrap(http.get(`/datasets/${encodeURIComponent(key)}/dim-values`, { params: { field } }));
+}
+
+export function fetchLabelList(params: {
+  page: number;
+  size: number;
+  keyword?: string;
+}): Promise<LabelListResult> {
+  return unwrap(http.get('/labels', { params }));
+}
+
+// 全量字典。数据集编辑页用它显示「继承：XXX」提示，因此不走分页。
+export function fetchLabelMap(): Promise<{ label_map: StringMap }> {
+  return unwrap(http.get('/label-map'));
+}
+
+export function createLabel(payload: LabelCreatePayload): Promise<GlobalLabel> {
+  return unwrap(http.post('/labels', payload));
+}
+
+export function updateLabel(key: string, payload: LabelUpdatePayload): Promise<GlobalLabel> {
+  return unwrap(http.put(`/labels/${encodeURIComponent(key)}`, payload));
+}
+
+export function deleteLabel(key: string): Promise<unknown> {
+  return unwrap(http.delete(`/labels/${encodeURIComponent(key)}`));
 }

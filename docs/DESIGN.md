@@ -1,4 +1,4 @@
-# Datasource Service 设计文档
+# Dataset Service 设计文档
 
 > 定位：**把 ClickHouse 里的表，包装成一个个「数据集」给业务方自助查数。**
 > 使用方全程看不到 SQL——只勾选维度、指标、加过滤条件，后端负责把「查询意图」编译成 SQL 并执行。
@@ -11,7 +11,7 @@
 
 业务同学想查数，但直接给 ClickHouse 权限成本太高：写不对 SQL、口径各写各的、一个 `SELECT *` 把集群拖垮、还能看到不该看的租户数据。
 
-所以引入一层「数据集（datasource）」抽象：
+所以引入一层「数据集（dataset）」抽象：
 
 - 由数据/研发同学在配置页把一个数据集定义好（底层是一段 `mid_sql`）；
 - 业务同学在查询页只能在这个数据集划定的范围内勾选和过滤；
@@ -39,16 +39,16 @@ Go 服务 (gin，单进程单二进制，前端 dist 用 go:embed 打进去)
 
 ## 3. 数据模型
 
-单表 `datasource_config`，一个数据集一行。
+单表 `tb_dataset_config`，一个数据集一行。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `datasource_key` | varchar(64) | 数据集唯一标识，**全局唯一** |
-| `datasource_name` | varchar(128) | 展示名 |
+| `dataset_key` | varchar(64) | 数据集唯一标识，**全局唯一** |
+| `dataset_name` | varchar(128) | 展示名 |
 | `mid_sql` | mediumtext | 数据集的 SQL 主体，见第 6 节 |
 | `dim_map` | json | 维度：`{"city_name": "city", ...}`，key 是给业务看的名字，value 是真实列/表达式 |
 | `mtx_map` | json | 指标：`{"cost": "sum(cost)", ...}` |
-| `label_map` | json | 维度/指标的中文含义，纯展示用，不参与 SQL |
+| `label_map` | json | 维度/指标的中文含义，纯展示用，不参与 SQL。**是覆盖层**，留空则继承全局字典 |
 | `acl` | json | 权限配置，见第 7 节 |
 | `status` | tinyint | 1 启用 / 0 停用 |
 | `version` | int | 乐观锁版本号 |
@@ -57,10 +57,45 @@ Go 服务 (gin，单进程单二进制，前端 dist 用 go:embed 打进去)
 
 几个刻意的设计：
 
-- **软删除用 `bigint` 而不是 GORM 的 `gorm.DeletedAt`**。MySQL 唯一索引里 NULL 之间互不冲突，用 `DATETIME NULL` 会导致「删了再建同名」时唯一约束失效；改成「0 未删除 / 非 0 为删除时刻」，配合 `uk_datasource_key(datasource_key, deleted_at)` 才真正约束得住。
+- **软删除用 `bigint` 而不是 GORM 的 `gorm.DeletedAt`**。MySQL 唯一索引里 NULL 之间互不冲突，用 `DATETIME NULL` 会导致「删了再建同名」时唯一约束失效；改成「0 未删除 / 非 0 为删除时刻」，配合 `uk_dataset_key(dataset_key, deleted_at)` 才真正约束得住。
 - **`dim_map` / `mtx_map` 的值是「列表达式」而不只是列名**，所以 `toDate(ts)`、`sum(if(x>0, cost, 0))` 这类都能配置，口径由配置方锁定。
 - **`acl` 是 JSON 对象而不是若干独立列**。后续加 `users`、`roles`、读写分离等维度时往对象里塞字段即可，不改表结构、不迁存量数据。
 - **改配置带 `version` 乐观锁**，版本冲突返回 409，避免两人同时编辑互相覆盖。
+
+### 3.1 全局字段名称（`tb_global_label`）
+
+同一个 `city` 原本要在每个数据集里重复配一遍「城市」，改一次要改 N 处。因此单独抽一张字典表：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `field_key` | varchar(64) | 字段名，对应 `dim_map` / `mtx_map` 的键，**强制小写** |
+| `label` | varchar(128) | 中文名 |
+| `status` | tinyint | 1 启用 / 0 停用；停用等同于不存在 |
+| `version` / `created_by` / `updated_by` / `deleted_at` | | 与 `tb_dataset_config` 同款 |
+
+**优先级：** 数据集 `label_map` → 全局 `tb_global_label` → 字段名本身。
+
+**三态语义**（唯一容易踩空的地方）：
+
+| 数据集 `label_map` 状态 | 结果 |
+|---|---|
+| 没有这个 key | 继承全局 |
+| 值非空 | 覆盖，只作用于当前数据集 |
+| 值为 `""`（显式空串） | **不继承**，退回显示字段名 |
+
+**合并放服务端**（`query.Service.VisibleDatasets`），前端拿到的 `label_map` 就是最终值，
+查询页下拉 / 结果表头 / 图表轴与图例三个消费点都不需要知道全局字典的存在。
+
+**只对真实存在的列生成名字**：遍历的是（通过列级权限过滤后的）`dim_map` ∪ `mtx_map`，
+而不是 `label_map` 或全局字典。否则全局字典里跟本数据集无关的字段会混进表头。
+
+**缓存**：进程内 `sync.RWMutex` + 30 秒 TTL，写操作立即失效本进程缓存；多实例靠 TTL 兜底。
+读失败时降级为空字典或沿用旧缓存，**绝不把错误抛给查询主流程**——为了显示中文名让整个查询失败是本末倒置。
+
+**已知风险：同名不同义。** `field_key` 只有字段名，跨数据集必然可能撞车（A 的 `channel`
+是投放渠道，B 的可能是内部渠道分类）。当前缓解手段是：字段名称页显示「引用数据集数」、
+数据集编辑页列出「继承全局：city → 城市」、`label_map` 编辑器多一列「来源」标出覆盖关系。
+真正的冲突检测视图（列出与全局定义不一致的字段）**还没做**。
 
 ---
 
@@ -73,9 +108,12 @@ Go 服务 (gin，单进程单二进制，前端 dist 用 go:embed 打进去)
   - `mid_sql` 用 Monaco（SQL 高亮）；
   - `dim_map` / `mtx_map` / `label_map` 用键值对编辑器；
   - `acl` 直接用 JSON 文本编辑（对象结构，方便扩展）；
-  - **改动实时校验**：`POST /datasources/validate` 只校验不落库，key 冲突、map 为空、行级规则配错等在保存前就报出来。
+  - **改动实时校验**：`POST /datasets/validate` 只校验不落库，key 冲突、map 为空、行级规则配错等在保存前就报出来。
 - `mid_sql` 的长度上限 1 MiB（`MAX_SQL_BYTES`），防误操作把存储撑爆。
 - 删除是软删除，同名 key 删除后可以重新建。
+
+同级的「字段名称」页（`/labels`）维护全局字典，见 3.1。它和配置管理页共用一套交互
+（搜索 + 分页 + 抽屉编辑 + 乐观锁），额外多一列「引用数据集数」用来提示改动的影响面。
 
 ---
 
@@ -87,7 +125,7 @@ Go 服务 (gin，单进程单二进制，前端 dist 用 go:embed 打进去)
 
 ```jsonc
 {
-  "datasource_key": "ad_cost_daily",
+  "dataset_key": "ad_cost_daily",
   "dims":    ["stat_date", "city_name"],   // 勾选的维度
   "metrics": ["cost", "clicks"],           // 勾选的指标
   "filter":  { ... },                      // 过滤条件树，见下节
@@ -157,7 +195,7 @@ WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT n
 
 权限只管控**查询页**，配置页不做鉴权。
 
-### 7.1 数据源级：`acl.tenants`
+### 7.1 数据集级：`acl.tenants`
 
 ```json
 {"tenants": ["t1", "t2"]}
@@ -166,7 +204,7 @@ WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT n
 - 空 / 不配 = 不限制，所有人可见；
 - 非空 = 登录态租户与白名单**有交集**才可见。
 
-查询页的数据源下拉、`query/execute`、`dim-values` 三处都做校验。
+查询页的数据集下拉、`query/execute`、`dim-values` 三处都做校验。
 
 ### 7.2 列级：`acl.col_tenants`
 
@@ -259,10 +297,14 @@ WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT n
 
 ## 9. 结果展示
 
-- **表格**：列头用 `label_map` 的中文名；前端分页（20/50/100/200）。
+- **表格**：列头用合并后的中文名（全局字典 + 数据集覆盖）；前端分页（20/50/100/200）。
 - **排序与行数**：在查询构建器里配置（排序字段 + 升降序、返回行数），随查询一起提交给后端由 ClickHouse 排，**不是前端排序**。
-- **图表**：折线 / 柱状 / 条形 / 面积 / 饼图 / 双轴。
-  - Y 轴可多选指标，**默认全选**；可指定分组维度；柱状/面积支持堆叠。
+- **呈现方式：四个 tab —— 表格（默认）/ 柱状图 / 折线图 / 饼图。**
+  - **字段跟着查询走**：结果区不提供二次圈选。第 1 个维度做 X 轴、第 2 个做分组、指标全画成系列；换口径回查询构建器改。
+  - **智能推荐**：按「维度数 × 指标数、X 轴是否为时间、类目多少、指标间量级差」在对应 tab 上打「推荐」角标，并在上方写一句理由。**只标记、不自动切换**，用户不会被抢走焦点。纯前端推导，后端接口不变。
+  - **不可用即置灰**：饼图要求单指标不分组且类目 3~12 个，折线图至少一个维度；不满足时 tab 置灰 + 悬停说明原因。
+  - 刻意只保留三种图：条形/面积只是柱状的排版差异，双轴只服务「量级差极大」这一种特例，后者改为推荐**表格**（看数比看图准）。
+  - **饼图悬停显示「数值（占比 x%）」**，占比在前端按总量现算；总量为 0 时退回只显示数值。
   - X 轴标签过多时自动旋转/隐藏，超过 30 个点自动加缩略轴。
   - 空值**不做连接**（`connectNulls: false`）——把缺失点连成线是在编造数据。
   - 系列数上限 12，超了提示收敛维度，避免画出没法看的图。
@@ -277,20 +319,31 @@ WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT n
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/datasources` | 列表（关键字 / 状态 / 分页） |
-| POST | `/api/v1/datasources` | 新建 |
-| GET | `/api/v1/datasources/:key` | 详情 |
-| PUT | `/api/v1/datasources/:key` | 更新（带 `version` 乐观锁） |
-| DELETE | `/api/v1/datasources/:key` | 软删除 |
-| POST | `/api/v1/datasources/validate` | 只校验不落库 |
+| GET | `/api/v1/datasets` | 列表（关键字 / 状态 / 分页） |
+| POST | `/api/v1/datasets` | 新建 |
+| GET | `/api/v1/datasets/:key` | 详情 |
+| PUT | `/api/v1/datasets/:key` | 更新（带 `version` 乐观锁） |
+| DELETE | `/api/v1/datasets/:key` | 软删除 |
+| POST | `/api/v1/datasets/validate` | 只校验不落库 |
+
+### 全局字段名称
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/labels` | 列表（关键字 / 状态 / 分页） |
+| POST | `/api/v1/labels` | 新建，`field_key` 冲突 409 |
+| GET | `/api/v1/labels/:field_key` | 详情 |
+| PUT | `/api/v1/labels/:field_key` | 更新中文名与启停（带 `version` 乐观锁）；`field_key` 不可改 |
+| DELETE | `/api/v1/labels/:field_key` | 软删除 |
+| GET | `/api/v1/label-map` | 全量字典，供编辑页显示继承提示。刻意不挂在 `/labels` 下：`/labels/:key` 的通配段会与同级静态段冲突 |
 
 ### 查询侧
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/query/datasources` | 查询页可选数据集，**已按登录态租户 + 列级白名单过滤**，且不含 `mid_sql` / `acl` |
+| GET | `/api/v1/query/datasets` | 查询页可选数据集，**已按登录态租户 + 列级白名单过滤**，且不含 `mid_sql` / `acl` |
 | POST | `/api/v1/query/execute` | 唯一的执行接口 |
-| GET | `/api/v1/datasources/:key/dim-values?field=xxx` | 维度候选值（自动 `DISTINCT`），同样受行级权限约束 |
+| GET | `/api/v1/datasets/:key/dim-values?field=xxx` | 维度候选值（自动 `DISTINCT`），同样受行级权限约束 |
 
 ### 探针
 
@@ -346,7 +399,7 @@ WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT n
 **需要和各位对齐的问题：**
 
 1. **登录态的信任边界**：现在 `X-Tenants` / `X-Visible-Users` 由上游网关注入，服务不校验。你们那边的网关能注入吗？还是要在服务内接一套真正的登录态解析？
-2. **停用（status=0）的数据源要不要从查询页消失**：目前仍然会出现在下拉里。我倾向于隐藏，但这是个行为变更，想听意见。
+2. **停用（status=0）的数据集要不要从查询页消失**：目前仍然会出现在下拉里。我倾向于隐藏，但这是个行为变更，想听意见。
 3. **`mid_sql` 的口径归口**：模板裁剪能力越强，配置方越容易写出「裁了之后口径就变了」的模板。要不要加一个「同维度组合下裁剪前后结果一致性」的自检？
 4. **行级权限目前只支持「IN 白名单」一种形态**。如果有「只看自己部门及下级」这类层级需求，得再扩一种规则类型——现在有吗？
 5. **指标口径的二次聚合约定**：外层会对 `mid_sql` 结果再 `GROUP BY`。如果某个数据集的 `mid_sql` 本身已经聚合过（比如带 `GROUP BY`），配置方需要按「可再聚合」的方式写。这条约定要不要落到配置校验里（现在只靠人工保证）？

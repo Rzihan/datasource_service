@@ -15,7 +15,7 @@ func TestACLAllows(t *testing.T) {
 		{"有交集即可见", ACL{Tenants: []string{"b", "a"}}, []string{"a"}, true},
 		{"多租户登录态命中其中一个即可", ACL{Tenants: []string{"a"}}, []string{"x", "a"}, true},
 		{"无交集不可见", ACL{Tenants: []string{"a", "b"}}, []string{"c"}, false},
-		{"登录态无租户时，受限数据源不可见", ACL{Tenants: []string{"a"}}, nil, false},
+		{"登录态无租户时，受限数据集不可见", ACL{Tenants: []string{"a"}}, nil, false},
 		{"有白名单但登录态为空切片不可见", ACL{Tenants: []string{"a"}}, []string{}, false},
 	}
 

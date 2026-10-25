@@ -13,15 +13,15 @@ var ErrInvalidQuery = errors.New("invalid query")
 
 // Spec 组装 SQL 所需的全部输入。不含任何 IO，方便表驱动测试。
 type Spec struct {
-	DatasourceKey string
-	MidSQL        string
-	DimMap        map[string]string
-	MtxMap        map[string]string
-	Dims          []string
-	Metrics       []string
+	DatasetKey string
+	MidSQL     string
+	DimMap     map[string]string
+	MtxMap     map[string]string
+	Dims       []string
+	Metrics    []string
 	// Filter 是过滤条件树，支持 AND / OR 任意嵌套；为 nil 表示不加过滤。
 	Filter *FilterNode
-	// RowFilters 是行级权限条件，由服务端根据数据源配置与登录态合成。
+	// RowFilters 是行级权限条件，由服务端根据数据集配置与登录态合成。
 	// 它们恒定以 AND 追加到 WHERE，不进用户的条件树——用户树的根可能是 OR，
 	// 塞进去会让权限条件被 OR 吞掉。
 	RowFilters   []RowFilter
@@ -57,7 +57,7 @@ const midAlias = "__mid"
 func Build(spec Spec) (string, []Param, error) {
 	midSQL := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(spec.MidSQL), ";"))
 	if midSQL == "" {
-		return "", nil, fmt.Errorf("%w: datasource 的 mid_sql 为空", ErrInvalidQuery)
+		return "", nil, fmt.Errorf("%w: dataset 的 mid_sql 为空", ErrInvalidQuery)
 	}
 	if len(spec.Dims) == 0 && len(spec.Metrics) == 0 {
 		return "", nil, fmt.Errorf("%w: 至少需要选择一个维度或一个指标", ErrInvalidQuery)
@@ -69,7 +69,7 @@ func Build(spec Spec) (string, []Param, error) {
 	for _, dim := range spec.Dims {
 		expr, ok := spec.DimMap[dim]
 		if !ok {
-			return "", nil, fmt.Errorf("%w: 维度 %q 不在该数据源的 dim_map 中", ErrInvalidQuery, dim)
+			return "", nil, fmt.Errorf("%w: 维度 %q 不在该数据集的 dim_map 中", ErrInvalidQuery, dim)
 		}
 		selectParts = append(selectParts, fmt.Sprintf("%s AS %s", expr, quote(dim)))
 		groupParts = append(groupParts, expr)
@@ -77,7 +77,7 @@ func Build(spec Spec) (string, []Param, error) {
 	for _, mtx := range spec.Metrics {
 		expr, ok := spec.MtxMap[mtx]
 		if !ok {
-			return "", nil, fmt.Errorf("%w: 指标 %q 不在该数据源的 mtx_map 中", ErrInvalidQuery, mtx)
+			return "", nil, fmt.Errorf("%w: 指标 %q 不在该数据集的 mtx_map 中", ErrInvalidQuery, mtx)
 		}
 		selectParts = append(selectParts, fmt.Sprintf("%s AS %s", expr, quote(mtx)))
 	}
@@ -300,7 +300,7 @@ func (b *filterCompiler) compileLeaf(node FilterNode) (cond, error) {
 		return cond{having: fmt.Sprintf("%s %s %s", quote(node.Field), op, ph)}, nil
 	}
 
-	return cond{}, fmt.Errorf("%w: 过滤字段 %q 不在该数据源的 dim_map / mtx_map 中", ErrInvalidQuery, node.Field)
+	return cond{}, fmt.Errorf("%w: 过滤字段 %q 不在该数据集的 dim_map / mtx_map 中", ErrInvalidQuery, node.Field)
 }
 
 // bind 生成命名参数占位符并登记参数值。

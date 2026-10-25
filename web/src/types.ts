@@ -1,6 +1,6 @@
 export type StringMap = Record<string, string>;
 
-// 行级过滤规则：把登录态的某个身份集合，映射到数据源里的一个维度列，
+// 行级过滤规则：把登录态的某个身份集合，映射到数据集里的一个维度列，
 // 查询时以「列 IN (...)」的形式追加到 WHERE。关闭 = 不追加。
 // column 只能取 dim_map 的键：行级过滤发生在聚合前，指标是聚合结果，放不进 WHERE。
 export interface RowRule {
@@ -15,8 +15,8 @@ export interface RowFilter {
   user?: RowRule;
 }
 
-// 数据源级访问控制。用对象而不是数组，后续可以往里加 roles 等维度。
-//   tenants：数据源级白名单，空 = 不限制
+// 数据集级访问控制。用对象而不是数组，后续可以往里加 roles 等维度。
+//   tenants：数据集级白名单，空 = 不限制
 //   col_tenants：列级白名单，key 是 dim_map / mtx_map 的键；没配的列默认可见
 //   row_filter：行级过滤，按登录态租户 / 可见用户过滤数据行
 // 示例：
@@ -29,20 +29,20 @@ export interface ACL {
   row_filter?: RowFilter;
 }
 
-// 查询页看到的数据源：刻意不含 mid_sql（用户不感知 SQL）与 acl。
+// 查询页看到的数据集：刻意不含 mid_sql（用户不感知 SQL）与 acl。
 // dim_map / mtx_map 已按列级白名单过滤，看不到的列不会出现。
-export interface QueryDatasource {
-  datasource_key: string;
-  datasource_name: string;
+export interface QueryDataset {
+  dataset_key: string;
+  dataset_name: string;
   dim_map: StringMap;
   mtx_map: StringMap;
   label_map: StringMap;
 }
 
-export interface DatasourceConfig {
+export interface DatasetConfig {
   id: number;
-  datasource_key: string;
-  datasource_name: string;
+  dataset_key: string;
+  dataset_name: string;
   mid_sql: string;
   dim_map: StringMap;
   mtx_map: StringMap;
@@ -57,15 +57,15 @@ export interface DatasourceConfig {
 }
 
 export interface ListResult {
-  items: DatasourceConfig[];
+  items: DatasetConfig[];
   total: number;
   page: number;
   size: number;
 }
 
 export interface CreatePayload {
-  datasource_key: string;
-  datasource_name: string;
+  dataset_key: string;
+  dataset_name: string;
   mid_sql: string;
   dim_map: StringMap;
   mtx_map: StringMap;
@@ -92,7 +92,7 @@ export interface OrderBy {
 
 // 查询意图：前端只描述想看什么，SQL 由后端生成，用户不感知 SQL 的存在。
 export interface QueryRequest {
-  datasource_key: string;
+  dataset_key: string;
   dims: string[];
   metrics: string[];
   filter?: FilterNode;
@@ -114,12 +114,46 @@ export interface QueryResult {
 }
 
 export interface UpdatePayload {
-  datasource_name: string;
+  dataset_name: string;
   mid_sql: string;
   dim_map: StringMap;
   mtx_map: StringMap;
   label_map: StringMap;
   acl: ACL;
+  status?: number;
+  version: number;
+}
+
+// 全局字段名称定义：一份「字段名 → 中文名」的字典，对所有数据集生效。
+// 数据集自己的 label_map 是覆盖层，优先级更高。
+export interface GlobalLabel {
+  id: number;
+  field_key: string;
+  label: string;
+  status: number;
+  version: number;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LabelListResult {
+  items: GlobalLabel[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface LabelCreatePayload {
+  field_key: string;
+  label: string;
+  status?: number;
+}
+
+// field_key 不可改：改名等价于删一条建一条，原地改会让引用它的数据集在不知情下换名字。
+export interface LabelUpdatePayload {
+  label: string;
   status?: number;
   version: number;
 }

@@ -8,14 +8,14 @@ import (
 
 func baseSpec() Spec {
 	return Spec{
-		DatasourceKey: "order_daily",
-		MidSQL:        "select stat_date, city_code, stat_cost, clicks from t_order_dtl",
-		DimMap:        map[string]string{"date": "stat_date", "city": "city_code"},
-		MtxMap:        map[string]string{"cost": "sum(stat_cost)", "click": "sum(clicks)"},
-		Dims:          []string{"date"},
-		Metrics:       []string{"cost"},
-		MaxLimit:      10000,
-		DefaultLimit:  1000,
+		DatasetKey:   "order_daily",
+		MidSQL:       "select stat_date, city_code, stat_cost, clicks from t_order_dtl",
+		DimMap:       map[string]string{"date": "stat_date", "city": "city_code"},
+		MtxMap:       map[string]string{"cost": "sum(stat_cost)", "click": "sum(clicks)"},
+		Dims:         []string{"date"},
+		Metrics:      []string{"cost"},
+		MaxLimit:     10000,
+		DefaultLimit: 1000,
 	}
 }
 
