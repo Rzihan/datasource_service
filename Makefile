@@ -1,6 +1,6 @@
 GO ?= go
 NPM ?= npm
-BIN := bin/datasource-service
+BIN := bin/dataset-service
 
 .PHONY: help tidy vet test build run web-install web-dev web-build up down logs clean
 

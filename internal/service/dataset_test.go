@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"datasource_service/internal/model"
+	"dataset_service/internal/model"
 )
 
 func TestNormalizeKey(t *testing.T) {
@@ -45,7 +45,7 @@ func TestNormalizeKey(t *testing.T) {
 }
 
 func TestCheckMidSQLLength(t *testing.T) {
-	svc := NewDatasourceService(nil, 100)
+	svc := NewDatasetService(nil, 100)
 	if err := svc.checkMidSQL("select 1"); err != nil {
 		t.Fatalf("short sql should pass: %v", err)
 	}
@@ -133,11 +133,11 @@ func TestNormalizeACLRejectsUnknownColumn(t *testing.T) {
 // Create 的入参校验失败时不应该触达数据库，这里 repo 为 nil，
 // 一旦调用到 repo 会 panic，正好验证「校验先行」。
 func TestCreateRejectsInvalidInputBeforeHittingRepo(t *testing.T) {
-	svc := NewDatasourceService(nil, 1024)
+	svc := NewDatasetService(nil, 1024)
 	_, err := svc.Create(context.Background(), &model.CreateRequest{
-		DatasourceKey:  "BAD KEY",
-		DatasourceName: "x",
-		MidSQL:         "select 1",
+		DatasetKey:  "BAD KEY",
+		DatasetName: "x",
+		MidSQL:      "select 1",
 	}, "tester")
 	if err == nil || !errors.Is(err, ErrInvalid) {
 		t.Fatalf("expected ErrInvalid, got %v", err)

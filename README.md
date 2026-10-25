@@ -1,11 +1,11 @@
-# datasource_service
+# dataset_service
 
-datasource 配置的增删改查服务。一条配置包含五个字段：
+dataset 配置的增删改查服务。一条配置包含五个字段：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `datasource_key` | varchar(64) | 业务主键，全局唯一，强制小写 |
-| `datasource_name` | varchar(128) | 展示名 |
+| `dataset_key` | varchar(64) | 业务主键，全局唯一，强制小写 |
+| `dataset_name` | varchar(128) | 展示名 |
 | `mid_sql` | mediumtext | 中间层 SQL，**纯文本存储，不做语法/语义校验** |
 | `dim_map` | json | 维度映射，`map[string]string` |
 | `mtx_map` | json | 指标映射，`map[string]string` |
@@ -75,7 +75,7 @@ docker compose up -d clickhouse
 
 | 方式 | 地址 / 命令 | 说明 |
 | --- | --- | --- |
-| **自带 Web 控制台**（推荐先用这个） | http://localhost:8123/play | ClickHouse 内置，零额外组件。登录用 `reader` / `reader_pass`（只读）或 `datasource` / `ch_pass` |
+| **自带 Web 控制台**（推荐先用这个） | http://localhost:8123/play | ClickHouse 内置，零额外组件。登录用 `reader` / `reader_pass`（只读）或 `dataset` / `ch_pass` |
 | **DBeaver**（功能最全） | `brew install --cask dbeaver-community` | 图形化客户端：浏览表结构、预览数据、建表改表、看执行计划 |
 | 本项目查询页 | http://localhost:8080/query | 面向业务用户的查数界面，不写 SQL |
 
@@ -121,25 +121,25 @@ deploy/mysql         init.sql 建表脚本
 
 | 路由 | 功能 |
 | --- | --- |
-| `/datasources` | 配置管理：datasource 的增删改查 |
-| `/query` | 可视化查询：选数据源 → 选维度/指标 → 加过滤 → 查数 → 看表格和图表 |
+| `/datasets` | 配置管理：dataset 的增删改查 |
+| `/query` | 可视化查询：选数据集 → 选维度/指标 → 加过滤 → 查数 → 看表格和图表 |
 
-## 租户与权限管控（数据源级 / 列级 / 行级）
+## 租户与权限管控（数据集级 / 列级 / 行级）
 
 **登录态**：顶栏可填多个登录身份，存在浏览器本地，随请求头带给后端
 ——和「操作人」走 `X-User` 是同一套极简模式，系统不接鉴权：
 
 | 顶栏 | 请求头 | 用途 |
 | --- | --- | --- |
-| 登录态租户 | `X-Tenants: t1,t2` | 数据源级 / 列级白名单命中判断；行级 `tenant` 规则的取值 |
+| 登录态租户 | `X-Tenants: t1,t2` | 数据集级 / 列级白名单命中判断；行级 `tenant` 规则的取值 |
 | 可见用户 | `X-Visible-Users: u1,u2` | 行级 `user` 规则的取值（一个用户可以代看若干用户的数据） |
 
-**数据源侧**：配置表新增 JSON 列 `acl`，三级管控，**在配置页以纯 JSON 编辑**
+**数据集侧**：配置表新增 JSON 列 `acl`，三级管控，**在配置页以纯 JSON 编辑**
 （`row_filter` 另有开关控件，控件改动会同步写回这段 JSON）：
 
 ```jsonc
 {
-  "tenants": ["t1", "t2"],                                    // 数据源级：有交集才可见
+  "tenants": ["t1", "t2"],                                    // 数据集级：有交集才可见
   "col_tenants": {"stat_date": ["t1"], "cost": ["t1", "t2"]}, // 列级：没配的列默认可见
   "row_filter": {                                             // 行级：追加到 WHERE
     "tenant": {"enabled": true, "column": "tenant"},
@@ -148,7 +148,7 @@ deploy/mysql         init.sql 建表脚本
 }
 ```
 
-- `tenants`：数据源级。空 / 不填 = 不限制。
+- `tenants`：数据集级。空 / 不填 = 不限制。
 - `col_tenants`：列级。key 是 `dim_map` / `mtx_map` 的**键**（即查询页里看到的维度/指标名），
   没配的列默认可见，配了的列有交集才可见。
 - `row_filter`：行级。两条规则各自独立开关，`enabled` 为真时把「登录态取值」以
@@ -162,7 +162,7 @@ deploy/mysql         init.sql 建表脚本
 1. `column` 只能取 `dim_map` 的键。行级过滤发生在**聚合前**，而 `mtx_map` 是
    `sum(...)` / `uniq(...)` 这类聚合结果，放进 WHERE 会被 ClickHouse 直接拒绝。
    服务层校验不通过即 400。
-2. 登录态对应列表为空时按 **fail-closed** 处理：该数据源查不到任何行，
+2. 登录态对应列表为空时按 **fail-closed** 处理：该数据集查不到任何行，
    而不是「放行全量」——权限配置宁可查不出，也不能多给。
 3. 两条规则都关闭时 `row_filter` 会被整体摘掉，不会在 JSON 里留空壳。
 
@@ -174,17 +174,17 @@ deploy/mysql         init.sql 建表脚本
 
 | 接口 | 行为 |
 | --- | --- |
-| `GET /api/v1/query/datasources` | 已按数据源级过滤；`dim_map` / `mtx_map` / `label_map` 再按列级过滤。不含 `mid_sql` 与 `acl` |
-| `POST /api/v1/query/execute` | 数据源或列无权访问 → 403，并记 WARN 日志；行级过滤以 AND 追加到 WHERE |
-| `GET /api/v1/datasources/:key/dim-values` | 同上，维度候选值同样受行级过滤约束 |
-| 配置管理页的列表/详情/改删 | **不受影响**，所有数据源都可见可改 |
+| `GET /api/v1/query/datasets` | 已按数据集级过滤；`dim_map` / `mtx_map` / `label_map` 再按列级过滤。不含 `mid_sql` 与 `acl` |
+| `POST /api/v1/query/execute` | 数据集或列无权访问 → 403，并记 WARN 日志；行级过滤以 AND 追加到 WHERE |
+| `GET /api/v1/datasets/:key/dim-values` | 同上，维度候选值同样受行级过滤约束 |
+| 配置管理页的列表/详情/改删 | **不受影响**，所有数据集都可见可改 |
 
 `execute` 除了校验 `dims` / `metrics`，还会**遍历过滤条件树里的所有字段**——
 过滤条件可以引用没被选为维度的列，这是最容易漏掉的一条路径。
 
 可见性规则就一处实现：`model.ACL.Allows`。刻意没把它写进 SQL——后续维度变多时，
 规则集中放在 Go 里才不会出现 SQL 与 Go 各写一遍、两边不一致的情况。
-代价是配置表要保持在千行量级，对「数据源配置」完全够用。
+代价是配置表要保持在千行量级，对「数据集配置」完全够用。
 
 ## 可视化查询怎么工作
 
@@ -193,9 +193,9 @@ deploy/mysql         init.sql 建表脚本
 ```jsonc
 // POST /api/v1/query/execute
 {
-  "datasource_key": "order_daily",
-  "dims":    ["date", "city"],        // 必须是该数据源 dim_map 里的 key
-  "metrics": ["cost", "click"],       // 必须是该数据源 mtx_map 里的 key
+  "dataset_key": "order_daily",
+  "dims":    ["date", "city"],        // 必须是该数据集 dim_map 里的 key
+  "metrics": ["cost", "click"],       // 必须是该数据集 mtx_map 里的 key
   // 过滤条件树：分组节点用 and / or 连接，可任意嵌套
   "filter": {
     "logic": "and",
@@ -377,14 +377,14 @@ from demo.t_order_dtl f
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/datasources` | 分页列表，参数 `page` `size` `keyword` `status` |
-| GET | `/datasources/:key` | 详情 |
-| POST | `/datasources` | 新建，key 冲突返回 409 |
-| PUT | `/datasources/:key` | 全量更新，带 `version` 乐观锁，冲突返回 409 |
-| DELETE | `/datasources/:key` | 软删除 |
-| POST | `/datasources/validate` | 只校验 dim_map / mtx_map，不落库 |
+| GET | `/datasets` | 分页列表，参数 `page` `size` `keyword` `status` |
+| GET | `/datasets/:key` | 详情 |
+| POST | `/datasets` | 新建，key 冲突返回 409 |
+| PUT | `/datasets/:key` | 全量更新，带 `version` 乐观锁，冲突返回 409 |
+| DELETE | `/datasets/:key` | 软删除 |
+| POST | `/datasets/validate` | 只校验 dim_map / mtx_map，不落库 |
 | POST | `/query/execute` | 按查询意图执行查询，返回列、行、耗时、是否截断 |
-| GET | `/datasources/:key/dim-values` | 某维度的候选值（`?field=city`），上限 `QUERY_DIM_VALUE_LIMIT` |
+| GET | `/datasets/:key/dim-values` | 某维度的候选值（`?field=city`），上限 `QUERY_DIM_VALUE_LIMIT` |
 | GET | `/healthz` `/readyz` | 存活 / 就绪探针（readyz 会 ping 数据库） |
 
 除 `Content-Type` 外，请求头还有三个：`X-User`（审计）、`X-Tenants`、`X-Visible-Users`（登录态身份）。
@@ -392,11 +392,11 @@ from demo.t_order_dtl f
 示例：
 
 ```bash
-curl -X POST localhost:8080/api/v1/datasources \
+curl -X POST localhost:8080/api/v1/datasets \
   -H 'Content-Type: application/json' -H 'X-User: zhangsan' \
   -d '{
-    "datasource_key": "order_daily",
-    "datasource_name": "订单日报",
+    "dataset_key": "order_daily",
+    "dataset_name": "订单日报",
     "mid_sql": "select stat_date, sum(stat_cost) as cost from t_order group by stat_date",
     "dim_map": {"date": "stat_date"},
     "mtx_map": {"cost": "sum(stat_cost)", "click": "sum(clicks)", "uid": "uid"}
@@ -410,7 +410,7 @@ curl -X POST localhost:8080/api/v1/datasources \
 | `HTTP_PORT` | 8080 | 监听端口 |
 | `GIN_MODE` | release | `debug` 会打印 SQL |
 | `DB_HOST` / `DB_PORT` | mysql / 3306 | 数据库地址 |
-| `DB_USER` / `DB_PASSWORD` / `DB_NAME` | datasource / - / datasource_service | 数据库凭据 |
+| `DB_USER` / `DB_PASSWORD` / `DB_NAME` | dataset / - / dataset_service | 数据库凭据 |
 | `DB_MAX_OPEN` / `DB_MAX_IDLE` | 50 / 10 | 连接池上限 |
 | `DB_MAX_LIFETIME_SECONDS` | 1800 | 连接最大复用时长 |
 | `MAX_SQL_BYTES` | 1048576 | mid_sql 字节软上限，防存储被撑爆 |
@@ -436,9 +436,9 @@ curl -X POST localhost:8080/api/v1/datasources \
    后者是 `DATETIME NULL` 语义，而 MySQL 唯一索引中 NULL 之间互不冲突——
    多条 `deleted_at IS NULL` 的同名记录可以并存，唯一约束形同虚设。
    改用 `0 / 毫秒时间戳` 并让 `deleted_at` 参与联合唯一键
-   `uk_datasource_key(datasource_key, deleted_at)`，才能真正约束住，同时允许删了再建同名 key。
+   `uk_dataset_key(dataset_key, deleted_at)`，才能真正约束住，同时允许删了再建同名 key。
 
-3. **`datasource_key` 强制小写**。MySQL 默认 collation `utf8mb4_0900_ai_ci` 不区分大小写，
+3. **`dataset_key` 强制小写**。MySQL 默认 collation `utf8mb4_0900_ai_ci` 不区分大小写，
    `Order_DS` 与 `order_ds` 会被判为同一条。前端与后端都会把 key 规范化为小写。
 
 4. **`dim_map` / `mtx_map` 不引入 JSON Schema，靠类型系统校验**。
@@ -471,4 +471,4 @@ curl -X POST localhost:8080/api/v1/datasources \
 - 登录态租户 / 可见用户同样来自请求头（`X-Tenants` / `X-Visible-Users`），客户端传什么就按什么过滤。
   **真实环境必须由网关注入或覆盖这两个头**，否则调用方可以自己给自己提权。
   HTTP 头只能带 ASCII，所以租户 id 与用户 id 请保持 ASCII（中文值请走编码或用 ASCII 别名）。
-- 没有变更历史表。如需回滚能力，加一张 `datasource_config_history` 在 service 的写路径上插快照即可。
+- 没有变更历史表。如需回滚能力，加一张 `tb_dataset_config_history` 在 service 的写路径上插快照即可。

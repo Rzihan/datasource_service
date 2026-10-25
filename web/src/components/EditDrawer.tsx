@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { App, Button, Drawer, Form, Input, Select, Space, Switch, Typography } from 'antd';
 import SqlEditor from './SqlEditor';
 import StringMapEditor from './StringMapEditor';
-import { createDatasource, updateDatasource } from '../api';
-import type { ACL, DatasourceConfig, RowFilter, RowRule, StringMap } from '../types';
+import { createDataset, updateDataset } from '../api';
+import type { ACL, DatasetConfig, RowFilter, RowRule, StringMap } from '../types';
 
 interface Props {
   open: boolean;
-  record: DatasourceConfig | null; // null 表示新建
+  record: DatasetConfig | null; // null 表示新建
   onClose: () => void;
   onSaved: () => void;
 }
@@ -22,7 +22,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   const { message } = App.useApp();
   const [saving, setSaving] = useState(false);
 
-  // datasource_key 在编辑态不可修改：它是全局业务主键，被下游引用，
+  // dataset_key 在编辑态不可修改：它是全局业务主键，被下游引用，
   // 改名等于换了一条配置。真要改名应当新建 + 停用旧的。
   const isEdit = record !== null;
 
@@ -38,8 +38,8 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   useEffect(() => {
     if (!open) return;
     if (record) {
-      setKey(record.datasource_key);
-      setName(record.datasource_name);
+      setKey(record.dataset_key);
+      setName(record.dataset_name);
       setMidSQL(record.mid_sql);
       setDimMap(record.dim_map ?? {});
       setMtxMap(record.mtx_map ?? {});
@@ -123,11 +123,11 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
 
   const save = async () => {
     if (!key.trim()) {
-      message.warning('请填写 datasource_key');
+      message.warning('请填写 dataset_key');
       return;
     }
     if (!name.trim()) {
-      message.warning('请填写 datasource_name');
+      message.warning('请填写 dataset_name');
       return;
     }
     if (!midSQL.trim()) {
@@ -150,8 +150,8 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
     setSaving(true);
     try {
       if (isEdit && record) {
-        await updateDatasource(record.datasource_key, {
-          datasource_name: name.trim(),
+        await updateDataset(record.dataset_key, {
+          dataset_name: name.trim(),
           mid_sql: midSQL,
           dim_map: dimMap,
           mtx_map: mtxMap,
@@ -162,9 +162,9 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
         });
         message.success('已保存');
       } else {
-        await createDatasource({
-          datasource_key: key.trim().toLowerCase(),
-          datasource_name: name.trim(),
+        await createDataset({
+          dataset_key: key.trim().toLowerCase(),
+          dataset_name: name.trim(),
           mid_sql: midSQL,
           dim_map: dimMap,
           mtx_map: mtxMap,
@@ -192,7 +192,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       open={open}
       onClose={onClose}
       width={900}
-      title={isEdit ? `编辑 ${record?.datasource_key ?? ''}` : '新建 datasource'}
+      title={isEdit ? `编辑 ${record?.dataset_key ?? ''}` : '新建 dataset'}
       destroyOnClose
       extra={
         <Space>
@@ -205,7 +205,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
     >
       <Form layout="vertical">
         <Form.Item
-          label="datasource_key"
+          label="dataset_key"
           required
           extra={
             isEdit
@@ -221,7 +221,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           />
         </Form.Item>
 
-        <Form.Item label="datasource_name" required>
+        <Form.Item label="dataset_name" required>
           <Input value={name} placeholder="例如 订单日报" onChange={(e) => setName(e.target.value)} />
         </Form.Item>
 
@@ -319,7 +319,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
                 只能映射到 dim_map 的维度——行级过滤发生在聚合前，mtx_map 是聚合结果，放不进 WHERE。
               </span>
               <span>
-                登录态对应列表为空时按 fail-closed 处理：该数据源查不到任何行（不是放行全量）。
+                登录态对应列表为空时按 fail-closed 处理：该数据集查不到任何行（不是放行全量）。
               </span>
             </Space>
           }
@@ -360,7 +360,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           extra={
             <Space direction="vertical" size={2}>
               <span>
-                数据源级 + 列级租户白名单，用于查询页的权限管控。不配置表示不限制；
+                数据集级 + 列级租户白名单，用于查询页的权限管控。不配置表示不限制；
                 配置了则登录态租户与白名单有交集才可见。
               </span>
               <Typography.Text code>

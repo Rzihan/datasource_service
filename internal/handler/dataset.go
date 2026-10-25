@@ -6,25 +6,25 @@ import (
 	"strconv"
 	"strings"
 
-	"datasource_service/internal/model"
-	"datasource_service/internal/repo"
-	"datasource_service/internal/service"
+	"dataset_service/internal/model"
+	"dataset_service/internal/repo"
+	"dataset_service/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
-// DatasourceHandler 配置的 HTTP 入口层，只做参数绑定与错误码映射，不含业务规则。
-type DatasourceHandler struct {
-	svc *service.DatasourceService
+// DatasetHandler 配置的 HTTP 入口层，只做参数绑定与错误码映射，不含业务规则。
+type DatasetHandler struct {
+	svc *service.DatasetService
 }
 
-// NewDatasourceHandler 构造 handler。
-func NewDatasourceHandler(svc *service.DatasourceService) *DatasourceHandler {
-	return &DatasourceHandler{svc: svc}
+// NewDatasetHandler 构造 handler。
+func NewDatasetHandler(svc *service.DatasetService) *DatasetHandler {
+	return &DatasetHandler{svc: svc}
 }
 
 // List 分页列表。
-func (h *DatasourceHandler) List(c *gin.Context) {
+func (h *DatasetHandler) List(c *gin.Context) {
 	q := model.ListQuery{
 		Keyword: c.Query("keyword"),
 		Page:    atoiDefault(c.Query("page"), 1),
@@ -48,7 +48,7 @@ func (h *DatasourceHandler) List(c *gin.Context) {
 }
 
 // Get 查询详情。
-func (h *DatasourceHandler) Get(c *gin.Context) {
+func (h *DatasetHandler) Get(c *gin.Context) {
 	m, err := h.svc.Get(c.Request.Context(), c.Param("key"))
 	if err != nil {
 		writeError(c, err)
@@ -58,7 +58,7 @@ func (h *DatasourceHandler) Get(c *gin.Context) {
 }
 
 // Create 新建。
-func (h *DatasourceHandler) Create(c *gin.Context) {
+func (h *DatasetHandler) Create(c *gin.Context) {
 	var req model.CreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		BadRequest(c, bindError(err))
@@ -73,7 +73,7 @@ func (h *DatasourceHandler) Create(c *gin.Context) {
 }
 
 // Update 全量更新（乐观锁）。
-func (h *DatasourceHandler) Update(c *gin.Context) {
+func (h *DatasetHandler) Update(c *gin.Context) {
 	var req model.UpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		BadRequest(c, bindError(err))
@@ -88,16 +88,16 @@ func (h *DatasourceHandler) Update(c *gin.Context) {
 }
 
 // Delete 软删除。
-func (h *DatasourceHandler) Delete(c *gin.Context) {
+func (h *DatasetHandler) Delete(c *gin.Context) {
 	if err := h.svc.Delete(c.Request.Context(), c.Param("key"), operator(c)); err != nil {
 		writeError(c, err)
 		return
 	}
-	OK(c, gin.H{"datasource_key": c.Param("key")})
+	OK(c, gin.H{"dataset_key": c.Param("key")})
 }
 
 // Validate 只校验不落库，供前端实时反馈。
-func (h *DatasourceHandler) Validate(c *gin.Context) {
+func (h *DatasetHandler) Validate(c *gin.Context) {
 	var req model.ValidateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		BadRequest(c, bindError(err))

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"datasource_service/internal/config"
+	"dataset_service/internal/config"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"

@@ -1,4 +1,4 @@
-# Datasource Service 设计文档
+# Dataset Service 设计文档
 
 > 定位：**把 ClickHouse 里的表，包装成一个个「数据集」给业务方自助查数。**
 > 使用方全程看不到 SQL——只勾选维度、指标、加过滤条件，后端负责把「查询意图」编译成 SQL 并执行。
@@ -11,7 +11,7 @@
 
 业务同学想查数，但直接给 ClickHouse 权限成本太高：写不对 SQL、口径各写各的、一个 `SELECT *` 把集群拖垮、还能看到不该看的租户数据。
 
-所以引入一层「数据集（datasource）」抽象：
+所以引入一层「数据集（dataset）」抽象：
 
 - 由数据/研发同学在配置页把一个数据集定义好（底层是一段 `mid_sql`）；
 - 业务同学在查询页只能在这个数据集划定的范围内勾选和过滤；
@@ -39,12 +39,12 @@ Go 服务 (gin，单进程单二进制，前端 dist 用 go:embed 打进去)
 
 ## 3. 数据模型
 
-单表 `datasource_config`，一个数据集一行。
+单表 `tb_dataset_config`，一个数据集一行。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `datasource_key` | varchar(64) | 数据集唯一标识，**全局唯一** |
-| `datasource_name` | varchar(128) | 展示名 |
+| `dataset_key` | varchar(64) | 数据集唯一标识，**全局唯一** |
+| `dataset_name` | varchar(128) | 展示名 |
 | `mid_sql` | mediumtext | 数据集的 SQL 主体，见第 6 节 |
 | `dim_map` | json | 维度：`{"city_name": "city", ...}`，key 是给业务看的名字，value 是真实列/表达式 |
 | `mtx_map` | json | 指标：`{"cost": "sum(cost)", ...}` |
@@ -57,7 +57,7 @@ Go 服务 (gin，单进程单二进制，前端 dist 用 go:embed 打进去)
 
 几个刻意的设计：
 
-- **软删除用 `bigint` 而不是 GORM 的 `gorm.DeletedAt`**。MySQL 唯一索引里 NULL 之间互不冲突，用 `DATETIME NULL` 会导致「删了再建同名」时唯一约束失效；改成「0 未删除 / 非 0 为删除时刻」，配合 `uk_datasource_key(datasource_key, deleted_at)` 才真正约束得住。
+- **软删除用 `bigint` 而不是 GORM 的 `gorm.DeletedAt`**。MySQL 唯一索引里 NULL 之间互不冲突，用 `DATETIME NULL` 会导致「删了再建同名」时唯一约束失效；改成「0 未删除 / 非 0 为删除时刻」，配合 `uk_dataset_key(dataset_key, deleted_at)` 才真正约束得住。
 - **`dim_map` / `mtx_map` 的值是「列表达式」而不只是列名**，所以 `toDate(ts)`、`sum(if(x>0, cost, 0))` 这类都能配置，口径由配置方锁定。
 - **`acl` 是 JSON 对象而不是若干独立列**。后续加 `users`、`roles`、读写分离等维度时往对象里塞字段即可，不改表结构、不迁存量数据。
 - **改配置带 `version` 乐观锁**，版本冲突返回 409，避免两人同时编辑互相覆盖。
@@ -73,7 +73,7 @@ Go 服务 (gin，单进程单二进制，前端 dist 用 go:embed 打进去)
   - `mid_sql` 用 Monaco（SQL 高亮）；
   - `dim_map` / `mtx_map` / `label_map` 用键值对编辑器；
   - `acl` 直接用 JSON 文本编辑（对象结构，方便扩展）；
-  - **改动实时校验**：`POST /datasources/validate` 只校验不落库，key 冲突、map 为空、行级规则配错等在保存前就报出来。
+  - **改动实时校验**：`POST /datasets/validate` 只校验不落库，key 冲突、map 为空、行级规则配错等在保存前就报出来。
 - `mid_sql` 的长度上限 1 MiB（`MAX_SQL_BYTES`），防误操作把存储撑爆。
 - 删除是软删除，同名 key 删除后可以重新建。
 
@@ -87,7 +87,7 @@ Go 服务 (gin，单进程单二进制，前端 dist 用 go:embed 打进去)
 
 ```jsonc
 {
-  "datasource_key": "ad_cost_daily",
+  "dataset_key": "ad_cost_daily",
   "dims":    ["stat_date", "city_name"],   // 勾选的维度
   "metrics": ["cost", "clicks"],           // 勾选的指标
   "filter":  { ... },                      // 过滤条件树，见下节
@@ -157,7 +157,7 @@ WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT n
 
 权限只管控**查询页**，配置页不做鉴权。
 
-### 7.1 数据源级：`acl.tenants`
+### 7.1 数据集级：`acl.tenants`
 
 ```json
 {"tenants": ["t1", "t2"]}
@@ -166,7 +166,7 @@ WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT n
 - 空 / 不配 = 不限制，所有人可见；
 - 非空 = 登录态租户与白名单**有交集**才可见。
 
-查询页的数据源下拉、`query/execute`、`dim-values` 三处都做校验。
+查询页的数据集下拉、`query/execute`、`dim-values` 三处都做校验。
 
 ### 7.2 列级：`acl.col_tenants`
 
@@ -281,20 +281,20 @@ WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT n
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/datasources` | 列表（关键字 / 状态 / 分页） |
-| POST | `/api/v1/datasources` | 新建 |
-| GET | `/api/v1/datasources/:key` | 详情 |
-| PUT | `/api/v1/datasources/:key` | 更新（带 `version` 乐观锁） |
-| DELETE | `/api/v1/datasources/:key` | 软删除 |
-| POST | `/api/v1/datasources/validate` | 只校验不落库 |
+| GET | `/api/v1/datasets` | 列表（关键字 / 状态 / 分页） |
+| POST | `/api/v1/datasets` | 新建 |
+| GET | `/api/v1/datasets/:key` | 详情 |
+| PUT | `/api/v1/datasets/:key` | 更新（带 `version` 乐观锁） |
+| DELETE | `/api/v1/datasets/:key` | 软删除 |
+| POST | `/api/v1/datasets/validate` | 只校验不落库 |
 
 ### 查询侧
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/query/datasources` | 查询页可选数据集，**已按登录态租户 + 列级白名单过滤**，且不含 `mid_sql` / `acl` |
+| GET | `/api/v1/query/datasets` | 查询页可选数据集，**已按登录态租户 + 列级白名单过滤**，且不含 `mid_sql` / `acl` |
 | POST | `/api/v1/query/execute` | 唯一的执行接口 |
-| GET | `/api/v1/datasources/:key/dim-values?field=xxx` | 维度候选值（自动 `DISTINCT`），同样受行级权限约束 |
+| GET | `/api/v1/datasets/:key/dim-values?field=xxx` | 维度候选值（自动 `DISTINCT`），同样受行级权限约束 |
 
 ### 探针
 
@@ -350,7 +350,7 @@ WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT n
 **需要和各位对齐的问题：**
 
 1. **登录态的信任边界**：现在 `X-Tenants` / `X-Visible-Users` 由上游网关注入，服务不校验。你们那边的网关能注入吗？还是要在服务内接一套真正的登录态解析？
-2. **停用（status=0）的数据源要不要从查询页消失**：目前仍然会出现在下拉里。我倾向于隐藏，但这是个行为变更，想听意见。
+2. **停用（status=0）的数据集要不要从查询页消失**：目前仍然会出现在下拉里。我倾向于隐藏，但这是个行为变更，想听意见。
 3. **`mid_sql` 的口径归口**：模板裁剪能力越强，配置方越容易写出「裁了之后口径就变了」的模板。要不要加一个「同维度组合下裁剪前后结果一致性」的自检？
 4. **行级权限目前只支持「IN 白名单」一种形态**。如果有「只看自己部门及下级」这类层级需求，得再扩一种规则类型——现在有吗？
 5. **指标口径的二次聚合约定**：外层会对 `mid_sql` 结果再 `GROUP BY`。如果某个数据集的 `mid_sql` 本身已经聚合过（比如带 `GROUP BY`），配置方需要按「可再聚合」的方式写。这条约定要不要落到配置校验里（现在只靠人工保证）？

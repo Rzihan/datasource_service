@@ -1,13 +1,13 @@
 import { App, Alert, Button, InputNumber, Select, Space, Typography } from 'antd';
 import { ClearOutlined, SearchOutlined } from '@ant-design/icons';
-import type { FilterNode, OrderBy, QueryDatasource } from '../types';
+import type { FilterNode, OrderBy, QueryDataset } from '../types';
 import FilterTreeEditor from './FilterTreeEditor';
 import { countLeaves, emptyRoot, removeFields } from '../utils/filterTree';
 
 interface Props {
-  datasources: QueryDatasource[];
-  selected: QueryDatasource | null;
-  onSelectDatasource: (key: string) => void;
+  datasets: QueryDataset[];
+  selected: QueryDataset | null;
+  onSelectDataset: (key: string) => void;
   dims: string[];
   metrics: string[];
   onDimsChange: (dims: string[]) => void;
@@ -27,7 +27,7 @@ interface Props {
 
 export default function QueryBuilder(props: Props) {
   const {
-    datasources, selected, onSelectDatasource,
+    datasets, selected, onSelectDataset,
     dims, metrics, onDimsChange, onMetricsChange,
     filterTree, onFilterTreeChange,
     orderBy, onOrderByChange,
@@ -91,16 +91,16 @@ export default function QueryBuilder(props: Props) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          数据源
+          数据集
         </Typography.Text>
         <Select
           style={{ width: '100%', marginTop: 4 }}
-          placeholder="选择数据源"
-          value={selected?.datasource_key}
-          onChange={onSelectDatasource}
-          options={datasources.map((d) => ({
-            value: d.datasource_key,
-            label: `${d.datasource_key} · ${d.datasource_name}`,
+          placeholder="选择数据集"
+          value={selected?.dataset_key}
+          onChange={onSelectDataset}
+          options={datasets.map((d) => ({
+            value: d.dataset_key,
+            label: `${d.dataset_key} · ${d.dataset_name}`,
           }))}
         />
       </div>
@@ -112,7 +112,7 @@ export default function QueryBuilder(props: Props) {
         <Select
           mode="multiple"
           style={{ width: '100%', marginTop: 4 }}
-          placeholder={selected ? '选择维度' : '请先选择数据源'}
+          placeholder={selected ? '选择维度' : '请先选择数据集'}
           disabled={!selected}
           value={dims}
           onChange={onDimsChange}
@@ -127,7 +127,7 @@ export default function QueryBuilder(props: Props) {
         <Select
           mode="multiple"
           style={{ width: '100%', marginTop: 4 }}
-          placeholder={selected ? '选择指标' : '请先选择数据源'}
+          placeholder={selected ? '选择指标' : '请先选择数据集'}
           disabled={!selected}
           value={metrics}
           onChange={handleMetricsChange}
@@ -205,7 +205,7 @@ export default function QueryBuilder(props: Props) {
         />
       </div>
 
-      {!selected && <Alert type="info" showIcon message="先选择一个数据源" />}
+      {!selected && <Alert type="info" showIcon message="先选择一个数据集" />}
 
       <Button
         type="primary"

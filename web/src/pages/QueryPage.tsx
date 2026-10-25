@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { App, Alert, Card, Col, Row, Spin } from 'antd';
 import QueryBuilder from '../components/QueryBuilder';
 import ResultView from '../components/ResultView';
-import { executeQuery, fetchDimValues, fetchQueryDatasources } from '../api';
-import type { FilterNode, OrderBy, QueryDatasource, QueryResult } from '../types';
+import { executeQuery, fetchDimValues, fetchQueryDatasets } from '../api';
+import type { FilterNode, OrderBy, QueryDataset, QueryResult } from '../types';
 import { emptyRoot, pruneEmpty } from '../utils/filterTree';
 import { subscribeTenants } from '../identity';
 
 export default function QueryPage() {
   const { message } = App.useApp();
-  const [datasources, setDatasources] = useState<QueryDatasource[]>([]);
+  const [datasets, setDatasets] = useState<QueryDataset[]>([]);
   const [loadingList, setLoadingList] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string>('');
   const [dims, setDims] = useState<string[]>([]);
@@ -23,33 +23,33 @@ export default function QueryPage() {
   const [dimValues, setDimValues] = useState<Record<string, string[]>>({});
   const [dimValueLoading, setDimValueLoading] = useState<Record<string, boolean>>({});
 
-  // 这里拿的是「按登录态租户过滤后」的数据源，所以看不到就说明没权限
-  const loadDatasources = useCallback(async () => {
+  // 这里拿的是「按登录态租户过滤后」的数据集，所以看不到就说明没权限
+  const loadDatasets = useCallback(async () => {
     setLoadingList(true);
     try {
-      const res = await fetchQueryDatasources();
-      setDatasources(res.items ?? []);
+      const res = await fetchQueryDatasets();
+      setDatasets(res.items ?? []);
     } catch (e) {
-      message.error((e as Error).message || '加载数据源失败');
+      message.error((e as Error).message || '加载数据集失败');
     } finally {
       setLoadingList(false);
     }
   }, [message]);
 
   useEffect(() => {
-    void loadDatasources();
-    // 顶栏切换租户后要重新拉一次可见数据源
-    return subscribeTenants(() => void loadDatasources());
-  }, [loadDatasources]);
+    void loadDatasets();
+    // 顶栏切换租户后要重新拉一次可见数据集
+    return subscribeTenants(() => void loadDatasets());
+  }, [loadDatasets]);
 
   const selected = useMemo(
-    () => datasources.find((d) => d.datasource_key === selectedKey) ?? null,
-    [datasources, selectedKey],
+    () => datasets.find((d) => d.dataset_key === selectedKey) ?? null,
+    [datasets, selectedKey],
   );
 
-  // 切换租户后当前数据源可能已不可见，这时要把选择清掉，避免拿着看不到的 key 去查
+  // 切换租户后当前数据集可能已不可见，这时要把选择清掉，避免拿着看不到的 key 去查
   useEffect(() => {
-    if (selectedKey && datasources.length > 0 && !datasources.some((d) => d.datasource_key === selectedKey)) {
+    if (selectedKey && datasets.length > 0 && !datasets.some((d) => d.dataset_key === selectedKey)) {
       setSelectedKey('');
       setDims([]);
       setMetrics([]);
@@ -59,10 +59,10 @@ export default function QueryPage() {
       setError('');
       setDimValues({});
     }
-  }, [datasources, selectedKey]);
+  }, [datasets, selectedKey]);
 
-  // 切换数据源时重置选择：不同数据源的维度/指标完全不同，留着旧的只会报错。
-  const onSelectDatasource = (key: string) => {
+  // 切换数据集时重置选择：不同数据集的维度/指标完全不同，留着旧的只会报错。
+  const onSelectDataset = (key: string) => {
     setSelectedKey(key);
     setDims([]);
     setMetrics([]);
@@ -100,7 +100,7 @@ export default function QueryPage() {
       // 空值的条件不提交，避免后端报无意义的错
       const pruned = pruneEmpty(filterTree);
       const res = await executeQuery({
-        datasource_key: selectedKey,
+        dataset_key: selectedKey,
         dims,
         metrics,
         filter: pruned ?? undefined,
@@ -124,9 +124,9 @@ export default function QueryPage() {
             <Spin />
           ) : (
             <QueryBuilder
-              datasources={datasources}
+              datasets={datasets}
               selected={selected}
-              onSelectDatasource={onSelectDatasource}
+              onSelectDataset={onSelectDataset}
               dims={dims}
               metrics={metrics}
               onDimsChange={setDims}

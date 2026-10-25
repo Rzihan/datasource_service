@@ -27,7 +27,7 @@ RUN GOPROXY="$GOPROXY" go mod download
 COPY . .
 # 前端产物放进 internal/web/dist，由 //go:embed all:dist 打进二进制
 COPY --from=web /web/dist ./internal/web/dist
-RUN CGO_ENABLED=0 GOPROXY="$GOPROXY" go build -trimpath -ldflags="-s -w" -o /out/datasource-service ./cmd/server
+RUN CGO_ENABLED=0 GOPROXY="$GOPROXY" go build -trimpath -ldflags="-s -w" -o /out/dataset-service ./cmd/server
 
 # ---------- 阶段 3：运行 ----------
 # 用 alpine 而非 distroless：gcr.io 在国内网络下经常拉不到。
@@ -36,7 +36,7 @@ FROM ${RUNTIME_IMAGE}
 RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -g 10001 -S app && adduser -u 10001 -S app -G app
 WORKDIR /app
-COPY --from=server /out/datasource-service /app/datasource-service
+COPY --from=server /out/dataset-service /app/dataset-service
 USER app:app
 EXPOSE 8080
-ENTRYPOINT ["/app/datasource-service"]
+ENTRYPOINT ["/app/dataset-service"]

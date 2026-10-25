@@ -4,9 +4,9 @@ import (
 	"errors"
 	"net/http"
 
-	"datasource_service/internal/handler"
-	"datasource_service/internal/middleware"
-	"datasource_service/internal/repo"
+	"dataset_service/internal/handler"
+	"dataset_service/internal/middleware"
+	"dataset_service/internal/repo"
 
 	"github.com/gin-gonic/gin"
 )
@@ -36,9 +36,9 @@ func (h *Handler) Execute(c *gin.Context) {
 	handler.OK(c, res)
 }
 
-// Datasources 查询页可选的数据源：已按当前登录态的租户白名单过滤。
-func (h *Handler) Datasources(c *gin.Context) {
-	items, err := h.svc.VisibleDatasources(c.Request.Context(), tenantsFromContext(c))
+// Datasets 查询页可选的数据集：已按当前登录态的租户白名单过滤。
+func (h *Handler) Datasets(c *gin.Context) {
+	items, err := h.svc.VisibleDatasets(c.Request.Context(), tenantsFromContext(c))
 	if err != nil {
 		handler.Fail(c, http.StatusInternalServerError, http.StatusInternalServerError, err.Error())
 		return

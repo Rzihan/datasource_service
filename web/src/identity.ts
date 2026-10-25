@@ -6,9 +6,9 @@ const visibleUserListeners = new Set<() => void>();
 
 // 登录态身份：一个用户可以属于多个租户，也可以代看若干用户的数据。
 // 两者都存在本地，随请求头 X-Tenants / X-Visible-Users 带给后端：
-//   X-Tenants      → 数据源级 / 列级租户白名单命中判断
+//   X-Tenants      → 数据集级 / 列级租户白名单命中判断
 //   X-Visible-Users → 行级过滤里 user 规则的取值来源
-// 留空表示「没有身份」，按 fail-closed 策略：开了行级过滤的数据源会直接查不到数据。
+// 留空表示「没有身份」，按 fail-closed 策略：开了行级过滤的数据集会直接查不到数据。
 function readList(key: string): string[] {
   return (localStorage.getItem(key) || '')
     .split(',')
@@ -40,7 +40,7 @@ export function writeTenants(value: string[]): void {
   writeList(TENANT_KEY, value, tenantListeners);
 }
 
-// 租户变化后查询页要重新拉可见数据源，所以需要订阅。
+// 租户变化后查询页要重新拉可见数据集，所以需要订阅。
 export function subscribeTenants(fn: () => void): () => void {
   return subscribe(tenantListeners, fn);
 }

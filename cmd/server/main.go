@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
-	"datasource_service/internal/config"
-	"datasource_service/internal/handler"
-	"datasource_service/internal/query"
-	"datasource_service/internal/repo"
-	"datasource_service/internal/router"
-	"datasource_service/internal/service"
+	"dataset_service/internal/config"
+	"dataset_service/internal/handler"
+	"dataset_service/internal/query"
+	"dataset_service/internal/repo"
+	"dataset_service/internal/router"
+	"dataset_service/internal/service"
 
 	"gorm.io/gorm"
 )
@@ -57,11 +57,11 @@ func main() {
 		slog.Warn("clickhouse is not reachable, query feature will fail until it recovers", "error", err)
 	}
 
-	dsHandler := handler.NewDatasourceHandler(
-		service.NewDatasourceService(repo.NewDatasourceRepo(db), cfg.MaxSQLBytes),
+	dsHandler := handler.NewDatasetHandler(
+		service.NewDatasetService(repo.NewDatasetRepo(db), cfg.MaxSQLBytes),
 	)
 	queryHandler := query.NewHandler(query.NewService(
-		repo.NewDatasourceRepo(db), chEngine, cfg.Query,
+		repo.NewDatasetRepo(db), chEngine, cfg.Query,
 		time.Duration(cfg.CH.QueryTimeoutSeconds)*time.Second,
 	))
 	engine := router.New(router.Deps{Config: cfg, DB: db, DS: dsHandler, QH: queryHandler})

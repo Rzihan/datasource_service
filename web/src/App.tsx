@@ -2,14 +2,14 @@ import { useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { App as AntApp, Input, Layout, Menu, Select, Space, Typography } from 'antd';
 import { AppstoreOutlined, BarChartOutlined } from '@ant-design/icons';
-import DatasourceList from './pages/DatasourceList';
+import DatasetList from './pages/DatasetList';
 import QueryPage from './pages/QueryPage';
 import { readTenants, readVisibleUsers, writeTenants, writeVisibleUsers } from './identity';
 
 const OPERATOR_KEY = 'ds_operator';
 
 const menuItems = [
-  { key: '/datasources', icon: <AppstoreOutlined />, label: '配置管理' },
+  { key: '/datasets', icon: <AppstoreOutlined />, label: '配置管理' },
   { key: '/query', icon: <BarChartOutlined />, label: '可视化查询' },
 ];
 
@@ -29,14 +29,14 @@ export default function App() {
     message.success(`操作人已切换为 ${v}`);
   };
 
-  // 登录态租户可以多选。数据源的 acl.tenants 非空时，与这里取交集才可见。
+  // 登录态租户可以多选。数据集的 acl.tenants 非空时，与这里取交集才可见。
   const onTenantsChange = (value: string[]) => {
     setTenants(value);
     writeTenants(value);
   };
 
   // 登录态可见用户可以多选，用于行级过滤的 user 规则。
-  // 留空时，开了该规则的数据源按 fail-closed 处理：查不到任何行。
+  // 留空时，开了该规则的数据集按 fail-closed 处理：查不到任何行。
   const onVisibleUsersChange = (value: string[]) => {
     setVisibleUsers(value);
     writeVisibleUsers(value);
@@ -54,7 +54,7 @@ export default function App() {
         }}
       >
         <Typography.Title level={5} style={{ margin: 0 }}>
-          Datasource 服务
+          Dataset 服务
         </Typography.Title>
         <Space size="small">
           <Typography.Text type="secondary">登录态租户</Typography.Text>
@@ -103,10 +103,10 @@ export default function App() {
         </Layout.Sider>
         <Layout.Content style={{ padding: 24, background: '#f5f5f5' }}>
           <Routes>
-            <Route path="/" element={<Navigate to="/datasources" replace />} />
-            <Route path="/datasources" element={<DatasourceList />} />
+            <Route path="/" element={<Navigate to="/datasets" replace />} />
+            <Route path="/datasets" element={<DatasetList />} />
             <Route path="/query" element={<QueryPage />} />
-            <Route path="*" element={<Navigate to="/datasources" replace />} />
+            <Route path="*" element={<Navigate to="/datasets" replace />} />
           </Routes>
         </Layout.Content>
       </Layout>

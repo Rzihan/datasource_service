@@ -15,7 +15,7 @@ type Config struct {
 	StaticDir    string        // 非空时用磁盘目录提供前端静态资源（开发态），否则使用 go:embed
 	MaxSQLBytes  int           // mid_sql 软上限，防止恶意/误操作把存储撑爆
 	RequestIDHdr string        // 请求 ID 响应头与读取头
-	DB           DBConfig      // MySQL 配置（存 datasource 配置）
+	DB           DBConfig      // MySQL 配置（存 dataset 配置）
 	CH           CHConfig      // ClickHouse 配置（跑查询）
 	Query        QueryConfig   // 查询执行限制
 	ShutdownWait time.Duration // 优雅退出最长等待时间
@@ -69,9 +69,9 @@ func Load() (*Config, error) {
 		DB: DBConfig{
 			Host:        envString("DB_HOST", "mysql"),
 			Port:        envInt("DB_PORT", 3306),
-			User:        envString("DB_USER", "datasource"),
+			User:        envString("DB_USER", "dataset"),
 			Password:    os.Getenv("DB_PASSWORD"),
-			Name:        envString("DB_NAME", "datasource_service"),
+			Name:        envString("DB_NAME", "dataset_service"),
 			Charset:     envString("DB_CHARSET", "utf8mb4"),
 			MaxOpen:     envInt("DB_MAX_OPEN", 50),
 			MaxIdle:     envInt("DB_MAX_IDLE", 10),

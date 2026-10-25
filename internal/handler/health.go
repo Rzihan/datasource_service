@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"datasource_service/internal/repo"
+	"dataset_service/internal/repo"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
