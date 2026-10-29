@@ -427,9 +427,14 @@ func (s *Service) DimValues(ctx context.Context, datasetKey, field string, tenan
 	if !ds.ACL.AllowsColumn(field, tenants) {
 		return nil, fmt.Errorf("%w: 当前登录态的租户无权访问列 %q", ErrForbidden, field)
 	}
-	expr, ok := ds.DimMap[field]
-	if !ok {
-		return nil, fmt.Errorf("%w: 字段 %q 不是该数据集的维度", ErrInvalidQuery, field)
+	// 多值维度也能枚举候选值，只是取的是数组里的单个元素而不是收拢后的组合串
+	expr, isDim := ds.DimMap[field]
+	multiExpr, isMulti := ds.MultiDimMap[field]
+	if !isDim && !isMulti {
+		return nil, fmt.Errorf("%w: 字段 %q 不是该数据集的维度或多值维度", ErrInvalidQuery, field)
+	}
+	if isMulti {
+		expr = multiExpr
 	}
 
 	// 候选值查询只用到一个维度列，但行级权限的列也要参与渲染判断
@@ -444,7 +449,13 @@ func (s *Service) DimValues(ctx context.Context, datasetKey, field string, tenan
 	if err != nil {
 		return nil, err
 	}
-	sqlText, params := BuildDimValuesSQL(midSQL, expr, s.cfg.DimValueLimit, buildRowFilters(ds, tenants, users))
+	var sqlText string
+	var params []Param
+	if isMulti {
+		sqlText, params = BuildMultiDimValuesSQL(midSQL, expr, s.cfg.DimValueLimit, buildRowFilters(ds, tenants, users))
+	} else {
+		sqlText, params = BuildDimValuesSQL(midSQL, expr, s.cfg.DimValueLimit, buildRowFilters(ds, tenants, users))
+	}
 
 	select {
 	case s.sem <- struct{}{}:

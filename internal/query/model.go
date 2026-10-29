@@ -14,11 +14,19 @@ const (
 	OpLike  = "like"
 	OpIn    = "in"
 	OpNotIn = "not in"
+	// 多值维度专用：判断数组列是否包含某些值。
+	// 不复用 = / in —— 数组列的「相等」没有直观语义，
+	// 用 has 系列把「包含 / 包含任一 / 包含全部」说清楚。
+	OpHas      = "has"
+	OpHasNot   = "has_not"
+	OpHasAny   = "has_any"
+	OpHasAll   = "has_all"
 )
 
 var allowedOps = map[string]bool{
 	OpEq: true, OpNe: true, OpGt: true, OpGte: true, OpLt: true, OpLte: true,
 	OpLike: true, OpIn: true, OpNotIn: true,
+	OpHas: true, OpHasNot: true, OpHasAny: true, OpHasAll: true,
 }
 
 // metricOps 是作用在指标（HAVING）上时允许的操作符。
@@ -27,6 +35,17 @@ var allowedOps = map[string]bool{
 var metricOps = map[string]bool{
 	OpEq: true, OpNe: true, OpGt: true, OpGte: true, OpLt: true, OpLte: true,
 	OpIn: true, OpNotIn: true,
+}
+
+// multiDimOps 是多值维度允许的操作符，只有 has 系列。
+// 数组列上 = / like / in 都没有直觉语义，硬跑要么报错要么给出意外结果。
+var multiDimOps = map[string]bool{
+	OpHas: true, OpHasNot: true, OpHasAny: true, OpHasAll: true,
+}
+
+// multiDimArrayOps 需要值列表（而不是单个值）的多值维度操作符。
+var multiDimArrayOps = map[string]bool{
+	OpHasAny: true, OpHasAll: true,
 }
 
 // 条件树的逻辑运算符。

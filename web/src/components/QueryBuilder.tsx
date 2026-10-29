@@ -45,8 +45,8 @@ export default function QueryBuilder(props: Props) {
   // 给它一个「多值」标记，否则用户会困惑为什么这一列长得跟别的维度不一样。
   const multiDimKeys = new Set(Object.keys(selected?.multi_dim_map ?? {}));
   const dimKeys = [...Object.keys(selected?.dim_map ?? {}), ...multiDimKeys].sort();
-  // 过滤条件里只给普通维度：多值维度是数组列，IN / = 的语义要先定清楚再放出来。
   const dimOptions = Object.keys(selected?.dim_map ?? {}).sort();
+  const multiDimOptions = [...multiDimKeys].sort();
   const mtxOptions = Object.keys(selected?.mtx_map ?? {}).sort();
   const sortableOptions = [...dims, ...metrics];
 
@@ -141,6 +141,8 @@ export default function QueryBuilder(props: Props) {
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {selectedMultiDims.map((d) => optionLabel(d)).join('、')} 是收拢展示的：
             同一分组下的多个取值会去重排序后拼成一个值（如「公司A,公司B」），不会按取值拆成多行。
+            用「包含」类条件过滤时，先筛行再收拢——
+            所以筛「包含公司A」看到的仍是这些行的全部公司，指标也只统计这些行。
           </Typography.Text>
         )}
       </div>
@@ -182,6 +184,7 @@ export default function QueryBuilder(props: Props) {
             onChange={onFilterTreeChange}
             depth={1}
             dimOptions={dimOptions}
+            multiDimOptions={multiDimOptions}
             metricOptions={filterableMetrics}
             isMetricField={(field) => mtxOptions.includes(field)}
             optionLabel={optionLabel}

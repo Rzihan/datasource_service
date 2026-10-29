@@ -166,6 +166,133 @@ func TestBuildMultiDim(t *testing.T) {
 	})
 }
 
+// 多值维度的过滤：语义是「包含」，不是「相等」。
+// 用 has 系列而不是 = / in，是因为数组列上「相等」没有直觉语义。
+func TestBuildMultiDimFilter(t *testing.T) {
+	cases := []struct {
+		name string
+		leaf FilterNode
+		want string
+	}{
+		// 注意 __mid. 前缀：不加的话 ClickHouse 会把 companies 解析成
+		// SELECT 里收拢后的 String 别名，报「has 第一个参数必须是数组」。
+		// 见 TestQualifyMid。
+		{name: "包含某个值", leaf: FilterNode{Field: "companies", Op: OpHas, Value: "公司A"},
+			want: "WHERE has(__mid.companies, {p0:String})"},
+		{name: "不包含某个值", leaf: FilterNode{Field: "companies", Op: OpHasNot, Value: "公司A"},
+			want: "WHERE (NOT has(__mid.companies, {p0:String}))"},
+		{name: "包含任一", leaf: FilterNode{Field: "companies", Op: OpHasAny, Values: []string{"公司A", "公司B"}},
+			want: "WHERE hasAny(__mid.companies, {p0:Array(String)})"},
+		{name: "包含全部", leaf: FilterNode{Field: "companies", Op: OpHasAll, Values: []string{"公司A", "公司B"}},
+			want: "WHERE hasAll(__mid.companies, {p0:Array(String)})"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			spec := baseSpec()
+			spec.MultiDimMap = map[string]string{"companies": "companies"}
+			spec.Dims = []string{"date", "companies"}
+			spec.Filter = &FilterNode{Logic: LogicAnd, Children: []FilterNode{c.leaf}}
+			sql, params, err := Build(spec)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !strings.Contains(sql, c.want) {
+				t.Fatalf("want %q, got:\n%s", c.want, sql)
+			}
+			// 过滤必须发生在收拢之前，否则语义就变了
+			if strings.Contains(sql, "HAVING") {
+				t.Fatalf("多值维度过滤不该进 HAVING:\n%s", sql)
+			}
+			if len(params) != 1 {
+				t.Fatalf("params = %+v", params)
+			}
+		})
+	}
+
+	t.Run("多值维度不支持 = 这类操作符", func(t *testing.T) {
+		spec := baseSpec()
+		spec.MultiDimMap = map[string]string{"companies": "companies"}
+		spec.Filter = &FilterNode{Logic: LogicAnd, Children: []FilterNode{{Field: "companies", Op: OpEq, Value: "公司A"}}}
+		if _, _, err := Build(spec); !errors.Is(err, ErrInvalidQuery) {
+			t.Fatalf("want ErrInvalidQuery, got %v", err)
+		}
+	})
+
+	t.Run("has 系列不能用在普通维度上", func(t *testing.T) {
+		spec := baseSpec()
+		spec.MultiDimMap = map[string]string{"companies": "companies"}
+		spec.Filter = &FilterNode{Logic: LogicAnd, Children: []FilterNode{{Field: "city", Op: OpHas, Value: "北京"}}}
+		if _, _, err := Build(spec); !errors.Is(err, ErrInvalidQuery) {
+			t.Fatalf("want ErrInvalidQuery, got %v", err)
+		}
+	})
+
+	t.Run("has_any 缺 values 要报错", func(t *testing.T) {
+		spec := baseSpec()
+		spec.MultiDimMap = map[string]string{"companies": "companies"}
+		spec.Filter = &FilterNode{Logic: LogicAnd, Children: []FilterNode{{Field: "companies", Op: OpHasAny}}}
+		if _, _, err := Build(spec); !errors.Is(err, ErrInvalidQuery) {
+			t.Fatalf("want ErrInvalidQuery, got %v", err)
+		}
+	})
+}
+
+// ClickHouse 的 WHERE 里裸列名会优先解析成 SELECT 别名，而不是子查询的列。
+// 这条规则一旦漏掉，多值维度必炸，指标同名时更危险（静默筛错）。
+func TestQualifyMid(t *testing.T) {
+	t.Run("与输出别名同名时加前缀", func(t *testing.T) {
+		if got := qualifyMid("uid", []string{"date"}, []string{"uid"}); got != "__mid.uid" {
+			t.Fatalf("got %q", got)
+		}
+		if got := qualifyMid("companies", []string{"companies"}, nil); got != "__mid.companies" {
+			t.Fatalf("got %q", got)
+		}
+	})
+
+	t.Run("不与别名同名时保持原样", func(t *testing.T) {
+		if got := qualifyMid("city_code", []string{"city"}, []string{"cost"}); got != "city_code" {
+			t.Fatalf("got %q", got)
+		}
+	})
+
+	t.Run("复合表达式不加前缀", func(t *testing.T) {
+		// __mid.toDate(ts) 会被当成复合函数名，是非法语法
+		for _, e := range []string{"toDate(ts)", "sum(if(a, b, c))", "`my col`", "a.b"} {
+			if got := qualifyMid(e, []string{e}, nil); got != e {
+				t.Fatalf("%q -> %q, want unchanged", e, got)
+			}
+		}
+	})
+}
+
+// 多值维度的候选值必须是单个元素：组合串的种类是排列组合，
+// 拿它当下拉选项等于让用户在几百个组合里挑。
+func TestBuildMultiDimValuesSQL(t *testing.T) {
+	sql, params := BuildMultiDimValuesSQL("select companies from t", "companies", 100, nil)
+	if !strings.Contains(sql, "arrayJoin(assumeNotNull(companies))") {
+		t.Fatalf("应先展开数组，got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "SELECT DISTINCT value") {
+		t.Fatalf("候选值必须去重，got:\n%s", sql)
+	}
+	if !strings.HasSuffix(sql, "LIMIT 100") {
+		t.Fatalf("got:\n%s", sql)
+	}
+	if len(params) != 0 {
+		t.Fatalf("params = %+v", params)
+	}
+
+	// 行级权限同样要注入，否则下拉会枚举到别人的取值
+	sql2, params2 := BuildMultiDimValuesSQL("select companies from t", "companies", 100,
+		[]RowFilter{{Expr: "tenant", Values: []string{"t1"}}})
+	if !strings.Contains(sql2, "tenant IN ({rf0:Array(String)})") {
+		t.Fatalf("行级权限未注入，got:\n%s", sql2)
+	}
+	if len(params2) != 1 {
+		t.Fatalf("params = %+v", params2)
+	}
+}
+
 func TestBuildRejects(t *testing.T) {
 	cases := []struct {
 		name   string

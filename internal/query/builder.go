@@ -119,7 +119,7 @@ func Build(spec Spec) (string, []Param, error) {
 		if values == nil {
 			values = []string{}
 		}
-		whereParts = append(whereParts, fmt.Sprintf("%s IN ({%s:Array(String)})", rf.Expr, name))
+		whereParts = append(whereParts, fmt.Sprintf("%s IN ({%s:Array(String)})", qualifyMid(rf.Expr, spec.Dims, spec.Metrics), name))
 		params = append(params, Param{Name: name, Value: values})
 	}
 
@@ -174,6 +174,43 @@ func Build(spec Spec) (string, []Param, error) {
 	}
 	sb.WriteString(fmt.Sprintf("\nLIMIT %d", limit))
 	return sb.String(), params, nil
+}
+
+// qualifyMid 在「表达式可能被 SELECT 别名遮蔽」时，给它加上子查询结果的前缀。
+//
+// 为什么要管这件事：ClickHouse 的 WHERE 里写裸列名，会优先解析成 SELECT 的别名
+// 而不是子查询的列。多值维度上这必炸——它的别名是收拢后的 String，底层列却是
+// Array(String)，于是 has(companies, ...) 报「第一个参数必须是数组，实际是 String」。
+// 指标别名与底层列同名时（uniq(uid) AS uid）更危险：行级权限条件会静默指向聚合结果，
+// 筛错了还不报错。
+//
+// 只给「裸标识符」加前缀：toDate(ts) 这类复合表达式不可能与别名同名，
+// 而 __mid.toDate(ts) 会被解析成复合函数名，反而是非法语法。
+func qualifyMid(expr string, dims, metrics []string) string {
+	e := strings.TrimSpace(expr)
+	if e == "" || !isBareIdent(e) {
+		return expr
+	}
+	if contains(dims, e) || contains(metrics, e) {
+		return midAlias + "." + e
+	}
+	return expr
+}
+
+// isBareIdent 判断是否为不带限定的标识符（列名），而不是函数调用等复合表达式。
+func isBareIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(i > 0 && c >= '0' && c <= '9')
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // cond 是一个条件（或一组条件）编译后的两种形态：
@@ -277,6 +314,14 @@ func (b *filterCompiler) compileLeaf(node FilterNode) (cond, error) {
 	if !allowedOps[op] {
 		return cond{}, fmt.Errorf("%w: 不支持的操作符 %q", ErrInvalidQuery, node.Op)
 	}
+	// has 系列只对数组列有意义。放在这里挡，比等到「字段不是多值维度」那条
+	// 通用报错更有用——用户真正需要知道的是「这个操作符该配什么字段」。
+	if multiDimOps[op] {
+		if _, ok := b.spec.MultiDimMap[node.Field]; !ok {
+			return cond{}, fmt.Errorf("%w: 操作符 %q 只能用于多值维度（multi_dim_map），%q 不是多值维度",
+				ErrInvalidQuery, op, node.Field)
+		}
+	}
 
 	// 维度是行级条件，永远可以下压到 WHERE；若它同时被选为分组键，
 	// 聚合后这一列还在，所以再给一份 HAVING 形态备用。
@@ -285,11 +330,46 @@ func (b *filterCompiler) compileLeaf(node FilterNode) (cond, error) {
 		if err != nil {
 			return cond{}, err
 		}
-		c := cond{where: fmt.Sprintf("%s %s %s", dimExpr, op, ph)}
+		c := cond{where: fmt.Sprintf("%s %s %s", qualifyMid(dimExpr, b.spec.Dims, b.spec.Metrics), op, ph)}
 		if contains(b.spec.Dims, node.Field) {
 			c.having = fmt.Sprintf("%s %s %s", quote(node.Field), op, ph)
 		}
 		return c, nil
+	}
+
+	// 多值维度：数组列，用 has 系列判断包含关系。
+	// 只出 where、不给 having——过滤必须发生在收拢之前，
+	// 收拢后的字符串再去 has 就变成了另一回事（而且语义反直觉）。
+	if expr, ok := b.spec.MultiDimMap[node.Field]; ok {
+		if !multiDimOps[op] {
+			return cond{}, fmt.Errorf("%w: 多值维度 %q 只能用 has / has_not / has_any / has_all（包含 / 不包含 / 包含任一 / 包含全部），当前是 %q",
+				ErrInvalidQuery, node.Field, op)
+		}
+		expr = qualifyMid(strings.TrimSpace(expr), b.spec.Dims, b.spec.Metrics)
+		if multiDimArrayOps[op] {
+			if len(node.Values) == 0 {
+				return cond{}, fmt.Errorf("%w: 多值维度 %q 的 %s 需要提供 values", ErrInvalidQuery, node.Field, op)
+			}
+			fn := "hasAny"
+			if op == OpHasAll {
+				fn = "hasAll"
+			}
+			name := fmt.Sprintf("p%d", b.paramSeq)
+			b.paramSeq++
+			b.params = append(b.params, Param{Name: name, Value: node.Values})
+			return cond{where: fmt.Sprintf("%s(%s, {%s:Array(String)})", fn, expr, name)}, nil
+		}
+		if strings.TrimSpace(node.Value) == "" {
+			return cond{}, fmt.Errorf("%w: 多值维度 %q 的 %s 需要提供 value", ErrInvalidQuery, node.Field, op)
+		}
+		name := fmt.Sprintf("p%d", b.paramSeq)
+		b.paramSeq++
+		b.params = append(b.params, Param{Name: name, Value: node.Value})
+		if op == OpHasNot {
+			// 加括号：NOT 与后续 AND 的优先级一旦理解错，条件就整个反了
+			return cond{where: fmt.Sprintf("(NOT has(%s, {%s:String}))", expr, name)}, nil
+		}
+		return cond{where: fmt.Sprintf("has(%s, {%s:String})", expr, name)}, nil
 	}
 
 	// 指标只有聚合后才有值，只能进 HAVING。
@@ -309,7 +389,7 @@ func (b *filterCompiler) compileLeaf(node FilterNode) (cond, error) {
 		return cond{having: fmt.Sprintf("%s %s %s", quote(node.Field), op, ph)}, nil
 	}
 
-	return cond{}, fmt.Errorf("%w: 过滤字段 %q 不在该数据集的 dim_map / mtx_map 中", ErrInvalidQuery, node.Field)
+	return cond{}, fmt.Errorf("%w: 过滤字段 %q 不在该数据集的 dim_map / multi_dim_map / mtx_map 中", ErrInvalidQuery, node.Field)
 }
 
 // bind 生成命名参数占位符并登记参数值。
@@ -415,6 +495,52 @@ func BuildDimValuesSQL(midSQL string, dimExpr string, limit int, rowFilters []Ro
 		params = append(params, Param{Name: name, Value: values})
 	}
 	fmt.Fprintf(&sb, " ORDER BY value LIMIT %d", limit)
+	return sb.String(), params
+}
+
+// BuildMultiDimValuesSQL 生成「多值维度的候选值」查询。
+//
+// 与 BuildDimValuesSQL 的关键区别：这里要枚举的是**单个元素**（公司A、公司B），
+// 不是收拢后的组合串（公司A,公司B）。组合串的种类是取值的排列组合，
+// 拿它当下拉选项等于让用户在几百个组合里挑。
+// 所以先把数组 arrayJoin 展开、再去重。
+//
+// 行级权限同样必须注入：展开后仍能枚举到别人的取值，等于绕过一半行级管控。
+func BuildMultiDimValuesSQL(midSQL string, dimExpr string, limit int, rowFilters []RowFilter) (string, []Param) {
+	mid := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(midSQL), ";"))
+	expr := strings.TrimSpace(dimExpr)
+
+	var params []Param
+	var whereParts []string
+	for i, rf := range rowFilters {
+		if rf.Expr == "" {
+			continue
+		}
+		name := fmt.Sprintf("rf%d", i)
+		values := rf.Values
+		if values == nil {
+			values = []string{}
+		}
+		whereParts = append(whereParts, fmt.Sprintf("%s IN ({%s:Array(String)})", rf.Expr, name))
+		params = append(params, Param{Name: name, Value: values})
+	}
+
+	var sb strings.Builder
+	// assumeNotNull 兜住 Nullable(Array)：arrayJoin(NULL) 的行为不直观，
+	// 提前把 Nullable 剥掉，空数组自然产出 0 行，不会崩。
+	fmt.Fprintf(&sb,
+		"SELECT DISTINCT value FROM (\n"+
+			"  SELECT arrayJoin(assumeNotNull(%s)) AS value\n"+
+			"  FROM (\n%s\n) AS %s",
+		expr, mid, midAlias,
+	)
+	if len(whereParts) > 0 {
+		sb.WriteString("\n  WHERE ")
+		sb.WriteString(strings.Join(whereParts, " AND "))
+	}
+	// 空串没有展示价值，还会在下拉里占一个看不清的选项
+	sb.WriteString("\n) WHERE value != '' ORDER BY value")
+	fmt.Fprintf(&sb, " LIMIT %d", limit)
 	return sb.String(), params
 }
 

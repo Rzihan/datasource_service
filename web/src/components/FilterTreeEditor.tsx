@@ -14,7 +14,17 @@ import { isGroup } from '../utils/filterTree';
 const OPS = ['=', '!=', '>', '>=', '<', '<=', 'like', 'in', 'not in'];
 // 指标是聚合出来的数值，模糊匹配没有语义，后端也会直接拒绝
 const METRIC_OPS = ['=', '!=', '>', '>=', '<', '<=', 'in', 'not in'];
-const MULTI_VALUE_OPS = ['in', 'not in'];
+const MULTI_VALUE_OPS = ['in', 'not in', 'has_any', 'has_all'];
+
+// 多值维度只有「包含」语义。数组列上 = / like / in 都没有直觉含义，
+// 所以单独一套操作符，标签也直接写成人话。
+const MULTI_DIM_OPS = ['has', 'has_not', 'has_any', 'has_all'];
+const OP_LABEL: Record<string, string> = {
+  has: '包含',
+  has_not: '不包含',
+  has_any: '包含任一',
+  has_all: '包含全部',
+};
 
 // 与后端 MaxFilterDepth 保持一致
 export const MAX_DEPTH = 5;
@@ -25,6 +35,8 @@ interface Props {
   onRemove?: () => void;
   depth: number;
   dimOptions: string[];
+  // 多值维度是一组独立的字段：它的操作符与渲染方式都跟普通维度不同
+  multiDimOptions: string[];
   metricOptions: string[];
   isMetricField: (field: string) => boolean;
   optionLabel: (k: string) => string;
@@ -38,13 +50,15 @@ interface Props {
 export default function FilterTreeEditor(props: Props) {
   const {
     node, onChange, onRemove, depth,
-    dimOptions, metricOptions, isMetricField, optionLabel,
+    dimOptions, multiDimOptions, metricOptions, isMetricField, optionLabel,
     dimValues, dimValueLoading, onRequestDimValues,
   } = props;
 
   const children = node.children ?? [];
   const canAddGroup = depth < MAX_DEPTH;
-  const hasField = dimOptions.length > 0 || metricOptions.length > 0;
+  const hasField = dimOptions.length > 0 || multiDimOptions.length > 0 || metricOptions.length > 0;
+
+  const isMultiDimField = (f: string) => multiDimOptions.includes(f);
 
   const updateChild = (index: number, next: FilterNode) => {
     onChange({ ...node, children: children.map((c, i) => (i === index ? next : c)) });
@@ -53,10 +67,10 @@ export default function FilterTreeEditor(props: Props) {
     onChange({ ...node, children: children.filter((_, i) => i !== index) });
   };
 
-  const defaultField = () => dimOptions[0] ?? metricOptions[0] ?? '';
+  const defaultField = () => dimOptions[0] ?? multiDimOptions[0] ?? metricOptions[0] ?? '';
   const defaultLeaf = (field: string): FilterNode => ({
     field,
-    op: isMetricField(field) ? '>' : '=',
+    op: isMetricField(field) ? '>' : isMultiDimField(field) ? 'has' : '=',
     value: '',
   });
 
@@ -77,18 +91,20 @@ export default function FilterTreeEditor(props: Props) {
     if (field && !isMetricField(field)) onRequestDimValues(field);
   };
 
-  // 字段下拉按维度 / 指标分组：指标只列已勾选的，未勾选的不能用于过滤
+  // 字段下拉按类型分组：三类字段的操作符完全不同，混在一组里会选到用不了的组合
   const fieldOptions = [
     { label: '维度（行级过滤）', options: dimOptions.map((k) => ({ value: k, label: optionLabel(k) })) },
+    { label: '多值维度（包含判断）', options: multiDimOptions.map((k) => ({ value: k, label: optionLabel(k) })) },
     { label: '指标（聚合后过滤）', options: metricOptions.map((k) => ({ value: k, label: optionLabel(k) })) },
   ].filter((g) => g.options.length > 0);
 
   const renderLeaf = (leaf: FilterNode, index: number) => {
     const op = leaf.op ?? '=';
-    const multi = MULTI_VALUE_OPS.includes(op);
     const field = leaf.field ?? '';
     const metric = isMetricField(field);
-    const ops = metric ? METRIC_OPS : OPS;
+    const multiDim = isMultiDimField(field);
+    const multi = MULTI_VALUE_OPS.includes(op);
+    const ops = metric ? METRIC_OPS : multiDim ? MULTI_DIM_OPS : OPS;
     const values = dimValues[field] ?? [];
     const patch = (p: Partial<FilterNode>) => updateChild(index, { ...leaf, ...p });
 
@@ -99,23 +115,23 @@ export default function FilterTreeEditor(props: Props) {
           value={field}
           options={fieldOptions}
           onChange={(v) => {
+            // 换字段类型时操作符也要跟着换，否则会提交一个后端必然拒绝的组合
             const toMetric = isMetricField(v);
-            patch({
-              field: v,
-              // 从维度切到指标时，若当前是 like 则要换掉，否则后端会拒绝
-              op: toMetric && !METRIC_OPS.includes(op) ? '>' : op,
-              value: '',
-              values: [],
-            });
+            const toMulti = isMultiDimField(v);
+            let nextOp = op;
+            if (toMetric && !METRIC_OPS.includes(op)) nextOp = '>';
+            else if (toMulti && !MULTI_DIM_OPS.includes(op)) nextOp = 'has';
+            else if (!toMetric && !toMulti && !OPS.includes(op)) nextOp = '=';
+            patch({ field: v, op: nextOp, value: '', values: [] });
             if (!toMetric) onRequestDimValues(v);
           }}
         />
         <Select
           style={{ width: '20%' }}
           value={op}
-          options={ops.map((o) => ({ value: o, label: o }))}
+          options={ops.map((o) => ({ value: o, label: OP_LABEL[o] ?? o }))}
           onChange={(v) => {
-            const isMulti = v === 'in' || v === 'not in';
+            const isMulti = MULTI_VALUE_OPS.includes(v);
             patch({ op: v, value: isMulti ? '' : leaf.value, values: isMulti ? leaf.values ?? [] : [] });
           }}
         />
@@ -192,6 +208,7 @@ export default function FilterTreeEditor(props: Props) {
               onRemove={() => removeChild(i)}
               depth={depth + 1}
               dimOptions={dimOptions}
+              multiDimOptions={multiDimOptions}
               metricOptions={metricOptions}
               isMetricField={isMetricField}
               optionLabel={optionLabel}
