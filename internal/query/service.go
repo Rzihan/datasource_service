@@ -107,6 +107,129 @@ func (s *Service) VisibleDatasets(ctx context.Context, tenants []string) ([]Quer
 	return out, nil
 }
 
+// DryRunRequest 自检请求：一段待验证的配置，不要求已保存。
+// 这样新建时也能先验证再落库，不必「保存了才发现 SQL 跑不通」。
+type DryRunRequest struct {
+	MidSQL string            `json:"mid_sql"`
+	DimMap map[string]string `json:"dim_map"`
+	MtxMap map[string]string `json:"mtx_map"`
+}
+
+// DryRunResult 自检结果。
+//
+// 刻意不把失败当成接口错误返回：自检的目的就是「告诉我哪里不通」，
+// 返回 500 或 400 反而把诊断信息降级成了错误码。所以 SQL 报错一律装在
+// result.error 里，接口本身仍然是 200。
+type DryRunResult struct {
+	OK bool `json:"ok"`
+	// Stage 记下失败发生在哪一步，用处是把问题定位到具体位置：
+	//   template → mid_sql 的 Go template 语法或渲染有问题
+	//   mid      → mid_sql 本身跑不通
+	//   expr     → mid_sql 没问题，是 dim_map / mtx_map 的表达式写错了
+	Stage       string   `json:"stage,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	SQL         string   `json:"sql,omitempty"`
+	MidColumns  []string `json:"mid_columns"`  // mid_sql 实际输出的列
+	Columns     []string `json:"columns"`      // 按 dim/mtx 表达式解析后的列
+	CheckedKeys []string `json:"checked_keys"` // 参与校验的字段，报错时可对照
+	ElapsedMS   int64    `json:"elapsed_ms"`
+}
+
+// DryRun 拿真实 ClickHouse 跑一遍配置，验证 SQL 可执行、字段表达式都存在。
+//
+// 只取 1 行：自检关心的是「能不能跑通、列对不对」，不关心数据长什么样，
+// 也因此不会对线上数仓造成实际压力。执行用的是只读账号，写不进去。
+//
+// 模板一律「全展开」（所有维度指标都当作要用到）：否则自检只覆盖
+// 「什么都不选」这一种渲染分支，用不到的 JOIN 分支里的错误就漏掉了。
+func (s *Service) DryRun(ctx context.Context, req DryRunRequest) (*DryRunResult, error) {
+	res := &DryRunResult{MidColumns: []string{}, Columns: []string{}, CheckedKeys: []string{}}
+	started := time.Now()
+	defer func() { res.ElapsedMS = time.Since(started).Milliseconds() }()
+
+	if strings.TrimSpace(req.MidSQL) == "" {
+		res.Stage = "template"
+		res.Error = "mid_sql 为空"
+		return res, nil
+	}
+
+	dimKeys := keysOf(req.DimMap)
+	mtxKeys := keysOf(req.MtxMap)
+	all := append(append([]string{}, dimKeys...), mtxKeys...)
+	rendered, err := RenderMidSQL(req.MidSQL, MidSQLData{
+		Dims:    dedupSorted(dimKeys),
+		Metrics: dedupSorted(mtxKeys),
+		Fields:  dedupSorted(all),
+	})
+	if err != nil {
+		res.Stage = "template"
+		res.Error = err.Error()
+		return res, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	// 第一枪：只跑 mid_sql 本身
+	midSQLText := BuildDryRunMidSQL(rendered)
+	res.SQL = midSQLText
+	raw, err := s.engine.Query(ctx, midSQLText, nil)
+	if err != nil {
+		res.Stage = "mid"
+		res.Error = shortErr(err)
+		return res, nil
+	}
+	res.MidColumns = columnNames(raw.Columns)
+
+	// 第二枪：把每个维度 / 指标表达式都选一遍
+	aliasSQL, keys, err := BuildDryRunSQL(rendered, req.DimMap, req.MtxMap)
+	if err != nil {
+		res.Stage = "expr"
+		res.Error = shortErr(err)
+		return res, nil
+	}
+	res.SQL = aliasSQL
+	res.CheckedKeys = keys
+	got, err := s.engine.Query(ctx, aliasSQL, nil)
+	if err != nil {
+		res.Stage = "expr"
+		res.Error = shortErr(err)
+		return res, nil
+	}
+	res.Columns = columnNames(got.Columns)
+	res.OK = true
+	return res, nil
+}
+
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func columnNames(cols []Column) []string {
+	out := make([]string, 0, len(cols))
+	for _, c := range cols {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+// shortErr 精简 ClickHouse 的报错。原始错误经常带一长串堆栈和内部 Code，
+// 有用的通常只有最前面那句。截断避免把 1 MiB 的 SQL 回显进错误信息。
+func shortErr(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, "\n"); i > 0 {
+		msg = msg[:i]
+	}
+	if len(msg) > 500 {
+		msg = msg[:500] + " …(已截断)"
+	}
+	return msg
+}
+
 // mergeLabels 合并三层命名：数据集覆盖 → 全局定义 → 字段名兜底。
 //
 // 三态是这里的关键，覆盖层的「没有这个 key」和「显式空串」必须区分开：

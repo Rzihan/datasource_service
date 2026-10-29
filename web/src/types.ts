@@ -204,6 +204,20 @@ export interface LabelOrphan {
   label: string;
 }
 
+// 配置自检结果。失败时不走错误码：诊断信息装在 result 里更有用。
+// stage 指出问题出在哪一步：template=模板语法 / mid=mid_sql 本身 /
+// expr=dim_map 或 mtx_map 的表达式。
+export interface DryRunResult {
+  ok: boolean;
+  stage?: string;
+  error?: string;
+  sql?: string;
+  mid_columns: string[];
+  columns: string[];
+  checked_keys: string[];
+  elapsed_ms: number;
+}
+
 export interface LabelCheckResult {
   conflicts: LabelConflict[];
   case_mismatch: LabelCaseMismatch[];

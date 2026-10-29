@@ -2,6 +2,7 @@ import axios from 'axios';
 import type {
   CreatePayload,
   DatasetConfig,
+  DryRunResult,
   GlobalLabel,
   HistoryResult,
   LabelCheckResult,
@@ -61,6 +62,15 @@ export function deleteDataset(key: string): Promise<unknown> {
 }
 
 // 查询页的数据集列表：已按请求头里的租户过滤，且不含 mid_sql
+// 配置自检：拿真实数仓跑一遍待保存的配置，不需要先保存
+export function dryRunDataset(payload: {
+  mid_sql: string;
+  dim_map: StringMap;
+  mtx_map: StringMap;
+}): Promise<DryRunResult> {
+  return unwrap(http.post('/datasets/dry-run', payload));
+}
+
 export function fetchHistories(key: string, limit = 50): Promise<HistoryResult> {
   return unwrap(http.get(`/datasets/${encodeURIComponent(key)}/histories`, { params: { limit } }));
 }

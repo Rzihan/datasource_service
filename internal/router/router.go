@@ -48,6 +48,8 @@ func New(d Deps) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	{
 		v1.POST("/datasets/validate", d.DS.Validate)
+		// 配置自检：拿真实数仓跑一遍待保存的配置，不必保存后才发现跑不通
+		v1.POST("/datasets/dry-run", d.QH.DryRun)
 		v1.GET("/datasets", d.DS.List)
 		v1.POST("/datasets", d.DS.Create)
 		v1.GET("/datasets/:key", d.DS.Get)

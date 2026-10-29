@@ -164,6 +164,52 @@ deploy/mysql         init.sql 建表脚本
 - **`field_key` 不可改**：改名等价于「删一条 + 建一条」，原地改会让引用它的数据集在
   不知情的情况下换名字。
 
+### 一致性检查
+
+全局字典只有一个字段名做 key，跨数据集必然可能同名不同义，而且**不会报错、只会静默显示错的名字**。
+`GET /api/v1/label-check` 把四类问题扫出来（前端在 `/labels` 的「一致性检查」页签）：
+
+| 类型 | 含义 | 怎么处理 |
+| --- | --- | --- |
+| `case_mismatch` | 数据集字段名与字典大小写不一致，全局定义静默失效 | 最该修：把数据集的 `Cost` 改成 `cost`，或删掉全局定义自己起名 |
+| `conflicts` | 数据集覆盖了全局且两者不一致 | 两种可能：真同名不同义（保留覆盖）或漏同步（跟着改）。机器分不清 |
+| `missing` | 数据集有这个字段但哪儿都没给中文名 | 补一条全局定义即可。显式留空（不使用中文名）的不算 |
+| `orphans` | 全局定义了但没有任何数据集引用 | 多半是改名或删除后的残留，可清理 |
+
+## 变更历史与回滚
+
+每次 create / update / delete 都会往 `tb_dataset_config_history` 存一份快照，可一键回滚。
+
+- **快照语义统一为「这次操作完成后的状态」**：delete 时配置已不存在，就记删除前的最后状态。
+  这样任何一条历史都能直接回滚到那一刻，不用区分前镜像还是后镜像。
+- **回滚本身也是一次变更**，会再记一条 `rollback` 历史，所以回滚可以再被回滚。
+- 历史表**不做软删**：它是事实记录，删掉一条历史等于抹掉一次变更，跟删配置不是一回事。
+- 历史写失败**不影响主流程**：配置已经落库了，因为记不下历史就返回错误，
+  反而会让用户以为没保存成功。
+
+存量环境升级（历史从升级后才开始记录，更早的变更无从追溯）：
+
+```bash
+mysql < deploy/mysql/migrate_add_history.sql
+```
+
+## 配置自检（dry-run）
+
+`POST /api/v1/datasets/dry-run` 拿**真实数仓**跑一遍配置，不必保存后才发现跑不通。
+请求体是待验证的配置（`mid_sql` + `dim_map` + `mtx_map`），所以新建时也能先验证再落库。
+
+分两枪执行，为的是把问题定位到具体位置：
+
+1. `SELECT * FROM (mid_sql) LIMIT 1` — 失败说明 **mid_sql 本身**有问题
+2. `SELECT <每个 dim/mtx 表达式> AS <键> ... LIMIT 1` — 这步失败说明 mid_sql 没问题、
+   是 **dim_map / mtx_map 的表达式**写错了。用 `SELECT *` 代替是验证不到这些表达式的
+
+模板一律**全展开**（所有维度指标都当作要用到）：否则自检只覆盖「什么都不选」这一种渲染分支，
+用不到的 JOIN 分支里的错误会漏掉。
+
+只取 1 行、走只读账号，不会对线上数仓造成压力。失败也返回 200——诊断信息装在
+`result.error` 里比降级成错误码有用。
+
 存量环境升级：
 
 ```bash
@@ -439,6 +485,10 @@ from demo.t_order_dtl f
 | PUT | `/labels/:field_key` | 更新中文名与启停，带 `version` 乐观锁；`field_key` 不可改 |
 | DELETE | `/labels/:field_key` | 软删除 |
 | GET | `/label-map` | 全量字典 `{field_key: 中文名}`，供编辑页显示继承提示（不分页） |
+| GET | `/label-check` | 一致性检查：冲突 / 大小写不生效 / 缺失 / 孤儿 |
+| GET | `/datasets/:key/histories` | 变更历史，按时间倒序（`?limit=`，默认 50，上限 200） |
+| POST | `/datasets/:key/rollback` | 回滚到某条历史（`{"history_id": N}`） |
+| POST | `/datasets/dry-run` | 配置自检：拿真实数仓跑一遍待保存的配置，不需要先保存 |
 | POST | `/query/execute` | 按查询意图执行查询，返回列、行、耗时、是否截断 |
 | GET | `/datasets/:key/dim-values` | 某维度的候选值（`?field=city`），上限 `QUERY_DIM_VALUE_LIMIT` |
 | GET | `/healthz` `/readyz` | 存活 / 就绪探针（readyz 会 ping 数据库） |
@@ -529,6 +579,9 @@ curl -X POST localhost:8080/api/v1/datasets \
   HTTP 头只能带 ASCII，所以租户 id 与用户 id 请保持 ASCII（中文值请走编码或用 ASCII 别名）。
 - 全局字典的 `field_key` 强制小写，但数据集的 `dim_map` / `mtx_map` 的键目前**没有**强制小写。
   如果你在 `dim_map` 里写了 `Cost`，全局定义的 `cost` 不会生效，而且不会有任何报错——
-  表头静默显示 `Cost`。同名不同义的排查也依赖人工，冲突检测视图还没做。
+  表头静默显示 `Cost`。这种情况只能靠 `/api/v1/label-check` 的一致性检查扫出来。
 - 字段名称页的「引用数据集」列只扫描前 200 个数据集，是个量级参考，不是精确统计。
-- 没有变更历史表。如需回滚能力，加一张 `tb_dataset_config_history` 在 service 的写路径上插快照即可。
+- 一致性检查也只扫描前 200 个数据集（`ListAvailable` 的默认上限）。
+- 变更历史只记 `tb_dataset_config`，全局字段名称（`tb_global_label`）的改动**还没有历史**。
+- 历史上限：每个数据集默认保留查询时 `limit` 条，表里本身不设上限也不清理，
+  长期跑要注意体积。

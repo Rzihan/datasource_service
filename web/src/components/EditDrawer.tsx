@@ -1,9 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
-import { App, Button, Drawer, Form, Input, Select, Space, Switch, Tag, Typography } from 'antd';
+import {
+  App,
+  Alert,
+  Button,
+  Drawer,
+  Form,
+  Input,
+  Select,
+  Space,
+  Switch,
+  Tag,
+  Typography,
+} from 'antd';
+import { ThunderboltOutlined } from '@ant-design/icons';
 import SqlEditor from './SqlEditor';
 import StringMapEditor from './StringMapEditor';
-import { createDataset, fetchLabelMap, updateDataset } from '../api';
-import type { ACL, DatasetConfig, RowFilter, RowRule, StringMap } from '../types';
+import { createDataset, dryRunDataset, fetchLabelMap, updateDataset } from '../api';
+import type { ACL, DatasetConfig, DryRunResult, RowFilter, RowRule, StringMap } from '../types';
+
+// 自检失败发生在哪一步，直接翻译成人话
+const STAGE_LABEL: Record<string, string> = {
+  template: 'mid_sql 模板有问题',
+  mid: 'mid_sql 跑不通',
+  expr: '维度/指标表达式有问题',
+};
 
 interface Props {
   open: boolean;
@@ -36,6 +56,24 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   const [enabled, setEnabled] = useState(true);
   // 全局字段名称字典，用来提示哪条中文名是继承来的。拉不到就当没有，不影响编辑。
   const [globalLabels, setGlobalLabels] = useState<StringMap>({});
+  const [dryResult, setDryResult] = useState<DryRunResult | null>(null);
+  const [dryRunning, setDryRunning] = useState(false);
+
+  // 自检用的是「当前表单里的内容」而不是已保存的配置，所以新建时也能先验证再保存
+  const onDryRun = async () => {
+    if (!midSQL.trim()) {
+      message.warning('先填 mid_sql');
+      return;
+    }
+    setDryRunning(true);
+    try {
+      setDryResult(await dryRunDataset({ mid_sql: midSQL, dim_map: dimMap, mtx_map: mtxMap }));
+    } catch (e) {
+      message.error((e as Error).message || '自检请求失败');
+    } finally {
+      setDryRunning(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -58,6 +96,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
 
   useEffect(() => {
     if (!open) return;
+    setDryResult(null); // 换一条配置/切到新建时，上一次的自检结论已经不适用了
     if (record) {
       setKey(record.dataset_key);
       setName(record.dataset_name);
@@ -289,6 +328,62 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           required
         >
           <SqlEditor value={midSQL} onChange={setMidSQL} />
+        </Form.Item>
+
+        <Form.Item
+          label="连通性自检"
+          extra="拿真实数仓跑一遍当前表单里的配置（只取 1 行，只读账号），不必保存后才发现跑不通"
+        >
+          <Space wrap>
+            <Button icon={<ThunderboltOutlined />} loading={dryRunning} onClick={() => void onDryRun()}>
+              跑一次自检
+            </Button>
+            {dryResult && (
+              <Typography.Text type={dryResult.ok ? 'success' : 'danger'}>
+                {dryResult.ok
+                  ? `通过 · ${dryResult.checked_keys.length} 个字段 · ${dryResult.elapsed_ms} ms`
+                  : `未通过（${STAGE_LABEL[dryResult.stage ?? ''] ?? dryResult.stage}）· ${dryResult.elapsed_ms} ms`}
+              </Typography.Text>
+            )}
+          </Space>
+          {dryResult && (
+            <div style={{ marginTop: 8 }}>
+              {dryResult.ok ? (
+                <Alert
+                  type="success"
+                  showIcon
+                  message={
+                    <Space size={4} wrap>
+                      <span>校验通过，字段：</span>
+                      {dryResult.columns.map((c) => (
+                        <Tag key={c} color="green">
+                          {c}
+                        </Tag>
+                      ))}
+                    </Space>
+                  }
+                  description={
+                    dryResult.mid_columns.length > 0 ? (
+                      <Typography.Text type="secondary">
+                        mid_sql 实际输出：{dryResult.mid_columns.join('、')}
+                      </Typography.Text>
+                    ) : null
+                  }
+                />
+              ) : (
+                <Alert
+                  type="error"
+                  showIcon
+                  message={dryResult.error || '自检失败'}
+                  description={
+                    <Typography.Paragraph code style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
+                      {dryResult.sql ?? ''}
+                    </Typography.Paragraph>
+                  }
+                />
+              )}
+            </div>
+          )}
         </Form.Item>
 
         <Form.Item label="dim_map" extra="map[string]string，可用表格或 JSON 两种方式编辑">

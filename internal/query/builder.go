@@ -414,6 +414,84 @@ func quote(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
+// BuildDryRunMidSQL 自检第一步的 SQL：只跑 mid_sql 本身，取它实际输出的列。
+//
+// 单独跑这一步是为了能区分两种错误：
+// 「SELECT * 就失败」说明 mid_sql 本身有问题；
+// 「SELECT * 成功、但带表达式的那句失败」说明 mid_sql 没问题、是 dim_map / mtx_map
+// 里的表达式写错了。混在一次查询里就只能得到一个笼统的报错。
+func BuildDryRunMidSQL(midSQL string) string {
+	mid := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(midSQL), ";"))
+	return fmt.Sprintf("SELECT * FROM (\n%s\n) AS %s LIMIT 1", mid, midAlias)
+}
+
+// BuildDryRunSQL 自检第二步的 SQL：把 dim_map / mtx_map 的每个表达式都选一遍。
+//
+// 不能用 SELECT * 代替：* 只反映 mid_sql 的输出列，验证不到
+// toDate(ts)、sum(if(...)) 这类改造过的表达式——而写错的恰恰通常是这些。
+//
+// 返回的 keys 与 SELECT 列表一一对应，便于把 ClickHouse 的报错对回具体字段。
+func BuildDryRunSQL(midSQL string, dims, mtxs map[string]string) (string, []string, error) {
+	mid := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(midSQL), ";"))
+
+	// 一个键同时出现在 dim / mtx 里是配置错误，别让它在 SQL 里变成重复别名
+	exprOf := make(map[string]string, len(dims)+len(mtxs))
+	for k, v := range dims {
+		exprOf[k] = v
+	}
+	for k, v := range mtxs {
+		exprOf[k] = v
+	}
+	keys := make([]string, 0, len(exprOf))
+	for k := range exprOf {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		expr := strings.TrimSpace(exprOf[k])
+		if expr == "" {
+			return "", nil, fmt.Errorf("%w: %q 的表达式为空", ErrInvalidQuery, k)
+		}
+		parts = append(parts, fmt.Sprintf("%s AS %s", expr, quote(k)))
+	}
+	if len(parts) == 0 {
+		return "", nil, fmt.Errorf("%w: dim_map 与 mtx_map 都是空的，没有可校验的字段", ErrInvalidQuery)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("SELECT\n  ")
+	sb.WriteString(strings.Join(parts, ",\n  "))
+	sb.WriteString("\nFROM (\n")
+	sb.WriteString(mid)
+	sb.WriteString("\n) AS ")
+	sb.WriteString(midAlias)
+
+	// 有指标又有维度时必须 GROUP BY，否则 ClickHouse 会报
+	// "Column x is not under aggregate function and not in GROUP BY keys"——
+	// 那是自检 SQL 自己缺 GROUP BY，不是配置写错了，会误导人。
+	if len(mtxs) > 0 && len(dims) > 0 {
+		groups := make([]string, 0, len(dims))
+		for _, k := range sortedKeys(dims) {
+			groups = append(groups, strings.TrimSpace(dims[k]))
+		}
+		sb.WriteString("\nGROUP BY ")
+		sb.WriteString(strings.Join(groups, ", "))
+	}
+	sb.WriteString("\nLIMIT 1")
+	return sb.String(), keys, nil
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func contains(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {

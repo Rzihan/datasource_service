@@ -46,6 +46,22 @@ func (h *Handler) Datasets(c *gin.Context) {
 	handler.OK(c, gin.H{"items": items})
 }
 
+// DryRun 配置自检：拿真实 ClickHouse 跑一遍待保存的配置。
+// 失败也算 200——诊断信息装在 result 里比降级成错误码有用。
+func (h *Handler) DryRun(c *gin.Context) {
+	var req DryRunRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handler.BadRequest(c, "请求体不是合法 JSON")
+		return
+	}
+	res, err := h.svc.DryRun(c.Request.Context(), req)
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handler.OK(c, res)
+}
+
 // DimValues 返回维度候选值，用于前端下拉枚举。
 func (h *Handler) DimValues(c *gin.Context) {
 	field := c.Query("field")
