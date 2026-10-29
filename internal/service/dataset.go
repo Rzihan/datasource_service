@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -97,7 +98,23 @@ func (s *DatasetService) Create(ctx context.Context, req *model.CreateRequest, o
 	if err := s.repo.Create(ctx, m); err != nil {
 		return nil, err
 	}
+	s.saveHistory(ctx, m, model.ActionCreate, operator)
 	return m, nil
+}
+
+// saveHistory 写变更快照。历史是审计与回滚能力，写失败不应该让主流程失败——
+// 配置已经落库了，因为记不下历史而返回错误，反而会让用户以为没保存成功。
+func (s *DatasetService) saveHistory(ctx context.Context, m *model.DatasetConfig, action, operator string) {
+	h := &model.DatasetHistory{
+		DatasetKey: m.DatasetKey,
+		Version:    m.Version,
+		Action:     action,
+		Operator:   operator,
+		Snapshot:   *m,
+	}
+	if err := s.repo.SaveHistory(ctx, h); err != nil {
+		slog.Error("save dataset history failed", "dataset_key", m.DatasetKey, "action", action, "error", err)
+	}
 }
 
 // Get 查询单条配置。
@@ -178,16 +195,102 @@ func (s *DatasetService) Update(ctx context.Context, key string, req *model.Upda
 	if err := s.repo.Update(ctx, m, req.Version); err != nil {
 		return nil, err
 	}
-	return s.repo.GetByKey(ctx, key)
+	after, err := s.repo.GetByKey(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	s.saveHistory(ctx, after, model.ActionUpdate, operator)
+	return after, nil
 }
 
-// Delete 软删除。
+// Delete 软删除。删除前先把最后状态存进历史，否则这条配置就彻底找不回来了。
 func (s *DatasetService) Delete(ctx context.Context, key, operator string) error {
 	key, err := normalizeKey(key)
 	if err != nil {
 		return err
 	}
-	return s.repo.SoftDelete(ctx, key, time.Now().UnixMilli())
+	before, err := s.repo.GetByKey(ctx, key)
+	if err != nil {
+		return err
+	}
+	if err := s.repo.SoftDelete(ctx, key, time.Now().UnixMilli()); err != nil {
+		return err
+	}
+	s.saveHistory(ctx, before, model.ActionDelete, operator)
+	return nil
+}
+
+// Histories 返回某数据集的变更历史（按时间倒序）。
+func (s *DatasetService) Histories(ctx context.Context, key string, limit int) (*model.HistoryResult, error) {
+	key, err := normalizeKey(key)
+	if err != nil {
+		return nil, err
+	}
+	items, err := s.repo.ListHistory(ctx, key, limit)
+	if err != nil {
+		return nil, err
+	}
+	return &model.HistoryResult{Items: items}, nil
+}
+
+// Rollback 把配置恢复到某条历史记录的样子。
+//
+// 两条安全约束：
+//  1. 历史必须属于这个数据集——否则用 A 的接口能回滚出 B 的配置，等于越权写入。
+//  2. 回滚本身也是一次变更，会再记一条历史，所以回滚可以再被回滚。
+func (s *DatasetService) Rollback(ctx context.Context, key string, req *model.RollbackRequest, operator string) (*model.DatasetConfig, error) {
+	key, err := normalizeKey(key)
+	if err != nil {
+		return nil, err
+	}
+	if req == nil || req.HistoryID == 0 {
+		return nil, fmt.Errorf("%w: history_id must not be empty", ErrInvalid)
+	}
+	h, err := s.repo.GetHistory(ctx, req.HistoryID)
+	if err != nil {
+		return nil, err
+	}
+	if h.DatasetKey != key {
+		return nil, repo.ErrHistoryMismatch
+	}
+	snap := h.Snapshot
+
+	target := &model.DatasetConfig{
+		DatasetKey:  key,
+		DatasetName: snap.DatasetName,
+		MidSQL:      snap.MidSQL,
+		DimMap:      snap.DimMap,
+		MtxMap:      snap.MtxMap,
+		LabelMap:    snap.LabelMap,
+		ACL:         snap.ACL,
+		Status:      snap.Status,
+		UpdatedBy:   operator,
+	}
+
+	cur, err := s.repo.GetByKey(ctx, key)
+	switch {
+	case err == nil:
+		// 还在：整体覆盖。取当前版本做乐观锁，并发下冲突返回 409 而不是静默覆盖。
+		if err := s.repo.Update(ctx, target, cur.Version); err != nil {
+			return nil, err
+		}
+	case errors.Is(err, repo.ErrNotFound):
+		// 已被删除：相当于复活。版本号归零重开。
+		target.CreatedBy = operator
+		target.Version = 0
+		if err := s.repo.Create(ctx, target); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, err
+	}
+
+	after, err := s.repo.GetByKey(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	s.saveHistory(ctx, after, model.ActionRollback, operator)
+	return after, nil
 }
 
 // Validate 只做结构与长度校验，不落库。供前端在提交前实时调用。

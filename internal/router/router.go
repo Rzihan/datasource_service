@@ -53,6 +53,9 @@ func New(d Deps) *gin.Engine {
 		v1.GET("/datasets/:key", d.DS.Get)
 		v1.PUT("/datasets/:key", d.DS.Update)
 		v1.DELETE("/datasets/:key", d.DS.Delete)
+		// 变更历史与回滚：配置写错了能一键退回
+		v1.GET("/datasets/:key/histories", d.DS.Histories)
+		v1.POST("/datasets/:key/rollback", d.DS.Rollback)
 
 		// 全局字段名称定义（对所有数据集生效的「字段名 → 中文名」字典）
 		v1.GET("/labels", d.LH.List)

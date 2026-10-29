@@ -66,3 +66,17 @@ INSERT INTO `tb_global_label` (`field_key`, `label`, `created_by`, `updated_by`)
   ('date',    '日期',     'migrate', 'migrate'),
   ('uv',      '去重用户数', 'migrate', 'migrate');
 
+-- 数据集配置的变更历史，用于审计与一键回滚。
+-- 快照语义统一为「这次操作完成后的配置状态」，删除时记删除前的最后状态，
+-- 所以任何一条历史都能直接回滚到那一刻的样子。
+CREATE TABLE IF NOT EXISTS `tb_dataset_config_history` (
+  `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  `dataset_key` VARCHAR(64)  NOT NULL COMMENT '数据集业务主键',
+  `version`     INT          NOT NULL DEFAULT 0 COMMENT '快照对应的配置版本号',
+  `action`      VARCHAR(16)  NOT NULL COMMENT 'create / update / delete / rollback',
+  `operator`    VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '操作人',
+  `created_at`  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `snapshot`    JSON         NOT NULL COMMENT '配置快照',
+  PRIMARY KEY (`id`),
+  KEY `idx_dataset_key` (`dataset_key`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据集配置变更历史表';

@@ -96,6 +96,35 @@ func (h *DatasetHandler) Delete(c *gin.Context) {
 	OK(c, gin.H{"dataset_key": c.Param("key")})
 }
 
+// Histories 变更历史列表（按时间倒序）。
+func (h *DatasetHandler) Histories(c *gin.Context) {
+	limit := atoiDefault(c.Query("limit"), 50)
+	if limit > 200 {
+		limit = 200
+	}
+	res, err := h.svc.Histories(c.Request.Context(), c.Param("key"), limit)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	OK(c, res)
+}
+
+// Rollback 把配置恢复到某条历史记录的样子。
+func (h *DatasetHandler) Rollback(c *gin.Context) {
+	var req model.RollbackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		BadRequest(c, bindError(err))
+		return
+	}
+	m, err := h.svc.Rollback(c.Request.Context(), c.Param("key"), &req, operator(c))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	OK(c, m)
+}
+
 // Validate 只校验不落库，供前端实时反馈。
 func (h *DatasetHandler) Validate(c *gin.Context) {
 	var req model.ValidateRequest
@@ -115,6 +144,10 @@ func writeError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, repo.ErrNotFound):
 		Fail(c, http.StatusNotFound, http.StatusNotFound, err.Error())
+	case errors.Is(err, repo.ErrHistoryNotFound):
+		Fail(c, http.StatusNotFound, http.StatusNotFound, err.Error())
+	case errors.Is(err, repo.ErrHistoryMismatch):
+		BadRequest(c, err.Error())
 	case errors.Is(err, repo.ErrDuplicateKey):
 		Fail(c, http.StatusConflict, http.StatusConflict, err.Error())
 	case errors.Is(err, repo.ErrVersionConflict):

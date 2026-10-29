@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { deleteDataset, fetchList } from '../api';
 import EditDrawer from '../components/EditDrawer';
+import HistoryDrawer from '../components/HistoryDrawer';
 import type { DatasetConfig } from '../types';
 
 export default function DatasetList() {
@@ -17,6 +18,7 @@ export default function DatasetList() {
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<DatasetConfig | null>(null);
+  const [historyKey, setHistoryKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -155,12 +157,15 @@ export default function DatasetList() {
     },
     {
       title: '操作',
-      width: 140,
+      width: 200,
       fixed: 'right',
       render: (_: unknown, record: DatasetConfig) => (
         <Space size="small">
           <Button type="link" size="small" onClick={() => onEdit(record)}>
             编辑
+          </Button>
+          <Button type="link" size="small" onClick={() => setHistoryKey(record.dataset_key)}>
+            历史
           </Button>
           <Popconfirm
             title={`确认删除 ${record.dataset_key}？`}
@@ -225,6 +230,13 @@ export default function DatasetList() {
           setDrawerOpen(false);
           void load();
         }}
+      />
+
+      <HistoryDrawer
+        open={historyKey !== null}
+        datasetKey={historyKey ?? ''}
+        onClose={() => setHistoryKey(null)}
+        onRolledBack={() => void load()}
       />
     </div>
   );

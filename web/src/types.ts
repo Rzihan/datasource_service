@@ -74,6 +74,21 @@ export interface CreatePayload {
   status?: number;
 }
 
+// 数据集配置的一次变更快照。snapshot 不返回给前端：mid_sql 最长 1 MiB，
+// 列表里带全量快照会把响应撑爆，回滚只需要 id。
+export interface DatasetHistory {
+  id: number;
+  dataset_key: string;
+  version: number;
+  action: 'create' | 'update' | 'delete' | 'rollback';
+  operator: string;
+  created_at: string;
+}
+
+export interface HistoryResult {
+  items: DatasetHistory[];
+}
+
 // 过滤条件树：分组节点带 logic + children，叶子节点带 field/op/value。
 // 分组可嵌套，用来表达 A AND (B OR C) 这类组合。
 export interface FilterNode {

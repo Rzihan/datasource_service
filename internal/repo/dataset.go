@@ -16,7 +16,12 @@ var (
 	ErrNotFound        = errors.New("dataset not found")
 	ErrDuplicateKey    = errors.New("dataset_key already exists")
 	ErrVersionConflict = errors.New("version conflict, please reload and retry")
+	ErrHistoryNotFound = errors.New("history not found")
 )
+
+// ErrHistoryMismatch 表示这条历史不属于请求里的数据集。
+// 不做这个校验的话，用 A 数据集的接口可以回滚出 B 数据集的配置。
+var ErrHistoryMismatch = errors.New("history does not belong to this dataset")
 
 // DatasetConfigModel 是 repo 层使用的实体别名，避免 repo 直接依赖 model 的 JSON 标签语义。
 type DatasetConfigModel = model.DatasetConfig
@@ -150,6 +155,48 @@ func (r *DatasetRepo) SoftDelete(ctx context.Context, key string, at int64) erro
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SaveHistory 写入一条变更快照。
+//
+// 刻意不做事务包裹：历史是审计用途，主流程写完再补一笔即可。
+// 真要强一致（历史写失败就回滚主流程）就得引入事务，而历史写失败的概率极低，
+// 为了它把每次配置变更都拖进事务里，代价和收益不成比例。失败只记日志。
+func (r *DatasetRepo) SaveHistory(ctx context.Context, h *model.DatasetHistory) error {
+	if err := r.db.WithContext(ctx).Create(h).Error; err != nil {
+		return fmt.Errorf("save dataset history: %w", err)
+	}
+	return nil
+}
+
+// ListHistory 按时间倒序返回某数据集的历史。limit <= 0 时用默认 50。
+func (r *DatasetRepo) ListHistory(ctx context.Context, key string, limit int) ([]*model.DatasetHistory, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var items []*model.DatasetHistory
+	err := r.db.WithContext(ctx).
+		Where("dataset_key = ?", key).
+		Order("id DESC").
+		Limit(limit).
+		Find(&items).Error
+	if err != nil {
+		return nil, fmt.Errorf("list dataset history: %w", err)
+	}
+	return items, nil
+}
+
+// GetHistory 查询单条历史（含快照）。
+func (r *DatasetRepo) GetHistory(ctx context.Context, id uint64) (*model.DatasetHistory, error) {
+	var h model.DatasetHistory
+	err := r.db.WithContext(ctx).Where("id = ?", id).Take(&h).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrHistoryNotFound
+		}
+		return nil, fmt.Errorf("get dataset history: %w", err)
+	}
+	return &h, nil
 }
 
 // isDuplicate 识别 MySQL 唯一键冲突。

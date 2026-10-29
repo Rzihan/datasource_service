@@ -145,6 +145,48 @@ type ValidateRequest struct {
 	ACL      ACL               `json:"acl"`
 }
 
+// 历史动作类型。
+const (
+	ActionCreate   = "create"
+	ActionUpdate   = "update"
+	ActionDelete   = "delete"
+	ActionRollback = "rollback"
+)
+
+// DatasetHistory 是数据集配置的一次变更快照，对应表 tb_dataset_config_history。
+//
+// 快照语义刻意统一为「这次操作完成后的配置状态」：
+//   - create / update：操作后的新状态
+//   - delete：删除前的最后状态（配置已不存在，只能记删除前）
+//   - rollback：回滚完成后的状态
+//
+// 这样任何一条历史都能直接回滚到「那一刻」的样子，不用区分是前镜像还是后镜像。
+type DatasetHistory struct {
+	ID         uint64        `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	DatasetKey string        `json:"dataset_key" gorm:"column:dataset_key;type:varchar(64);not null"`
+	Version    int           `json:"version" gorm:"column:version;type:int;not null;default:0"`
+	Action     string        `json:"action" gorm:"column:action;type:varchar(16);not null"`
+	Operator   string        `json:"operator" gorm:"column:operator;type:varchar(64);not null;default:''"`
+	CreatedAt  time.Time     `json:"created_at" gorm:"column:created_at;type:datetime(3);not null;autoCreateTime"`
+	Snapshot   DatasetConfig `json:"-" gorm:"column:snapshot;type:json;serializer:json;not null"`
+}
+
+// TableName 指定表名。
+func (DatasetHistory) TableName() string {
+	return "tb_dataset_config_history"
+}
+
+// HistoryResult 历史列表响应。Snapshot 不返回给前端：mid_sql 最长 1 MiB，
+// 列表里带全量快照会把响应撑爆，回滚只需要 id。
+type HistoryResult struct {
+	Items []*DatasetHistory `json:"items"`
+}
+
+// RollbackRequest 回滚请求。
+type RollbackRequest struct {
+	HistoryID uint64 `json:"history_id"`
+}
+
 // ListQuery 列表查询参数。
 type ListQuery struct {
 	Keyword string // 匹配 dataset_key / dataset_name

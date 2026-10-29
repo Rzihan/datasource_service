@@ -3,6 +3,7 @@ import type {
   CreatePayload,
   DatasetConfig,
   GlobalLabel,
+  HistoryResult,
   LabelCheckResult,
   LabelCreatePayload,
   LabelListResult,
@@ -60,6 +61,15 @@ export function deleteDataset(key: string): Promise<unknown> {
 }
 
 // 查询页的数据集列表：已按请求头里的租户过滤，且不含 mid_sql
+export function fetchHistories(key: string, limit = 50): Promise<HistoryResult> {
+  return unwrap(http.get(`/datasets/${encodeURIComponent(key)}/histories`, { params: { limit } }));
+}
+
+// 回滚本身也会记一条历史，所以回滚可以再被回滚。
+export function rollbackDataset(key: string, historyId: number): Promise<DatasetConfig> {
+  return unwrap(http.post(`/datasets/${encodeURIComponent(key)}/rollback`, { history_id: historyId }));
+}
+
 export function fetchQueryDatasets(): Promise<{ items: QueryDataset[] }> {
   return unwrap(http.get('/query/datasets'));
 }
