@@ -66,6 +66,7 @@ export function deleteDataset(key: string): Promise<unknown> {
 export function dryRunDataset(payload: {
   mid_sql: string;
   dim_map: StringMap;
+  multi_dim_map: StringMap;
   mtx_map: StringMap;
 }): Promise<DryRunResult> {
   return unwrap(http.post('/datasets/dry-run', payload));

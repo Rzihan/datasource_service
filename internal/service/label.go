@@ -261,7 +261,8 @@ func checkAgainst(_ context.Context, items []*model.DatasetConfig, global map[st
 	referenced := make(map[string]struct{}, len(global))
 
 	for _, ds := range items {
-		fields := append(keysOf(ds.DimMap), keysOf(ds.MtxMap)...)
+		fields := append(keysOf(ds.DimMap), keysOf(ds.MultiDimMap)...)
+		fields = append(fields, keysOf(ds.MtxMap)...)
 		sort.Strings(fields)
 		for _, k := range fields {
 			referenced[k] = struct{}{}

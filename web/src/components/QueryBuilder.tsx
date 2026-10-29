@@ -1,4 +1,4 @@
-import { App, Alert, Button, InputNumber, Select, Space, Typography } from 'antd';
+import { App, Alert, Button, InputNumber, Select, Space, Tag, Typography } from 'antd';
 import { ClearOutlined, SearchOutlined } from '@ant-design/icons';
 import type { FilterNode, OrderBy, QueryDataset } from '../types';
 import FilterTreeEditor from './FilterTreeEditor';
@@ -41,9 +41,16 @@ export default function QueryBuilder(props: Props) {
   const labelMap = selected?.label_map ?? {};
   const optionLabel = (k: string) => (labelMap[k] ? `${labelMap[k]}（${k}）` : k);
 
+  // 多值维度也出现在维度下拉里——它本来就是维度，只是取值有多个。
+  // 给它一个「多值」标记，否则用户会困惑为什么这一列长得跟别的维度不一样。
+  const multiDimKeys = new Set(Object.keys(selected?.multi_dim_map ?? {}));
+  const dimKeys = [...Object.keys(selected?.dim_map ?? {}), ...multiDimKeys].sort();
+  // 过滤条件里只给普通维度：多值维度是数组列，IN / = 的语义要先定清楚再放出来。
   const dimOptions = Object.keys(selected?.dim_map ?? {}).sort();
   const mtxOptions = Object.keys(selected?.mtx_map ?? {}).sort();
   const sortableOptions = [...dims, ...metrics];
+
+  const selectedMultiDims = dims.filter((d) => multiDimKeys.has(d));
 
   // 只有已勾选的指标才能用来过滤：没勾选的指标不会出现在结果里，
   // 拿它做过滤条件用户看不到依据，语义上也说不通。
@@ -116,8 +123,26 @@ export default function QueryBuilder(props: Props) {
           disabled={!selected}
           value={dims}
           onChange={onDimsChange}
-          options={dimOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
+          options={dimKeys.map((k) => ({
+            value: k,
+            label: multiDimKeys.has(k) ? (
+              <Space size={4}>
+                {optionLabel(k)}
+                <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+                  多值
+                </Tag>
+              </Space>
+            ) : (
+              optionLabel(k)
+            ),
+          }))}
         />
+        {selectedMultiDims.length > 0 && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {selectedMultiDims.map((d) => optionLabel(d)).join('、')} 是收拢展示的：
+            同一分组下的多个取值会去重排序后拼成一个值（如「公司A,公司B」），不会按取值拆成多行。
+          </Typography.Text>
+        )}
       </div>
 
       <div>

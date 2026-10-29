@@ -83,7 +83,7 @@ func TestNormalizeACL(t *testing.T) {
 	got, err := normalizeACL(model.ACL{
 		Tenants:    []string{" t2 ", "t1", "t1", ""},
 		ColTenants: map[string][]string{"cost": {"t1"}, "stat_date": {"t1", " t1 ", ""}},
-	}, dimMap, mtxMap)
+	}, dimMap, nil, mtxMap)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestNormalizeACL(t *testing.T) {
 	}
 
 	// 空列表等价于「不限制」，直接不落这一项
-	got, err = normalizeACL(model.ACL{ColTenants: map[string][]string{"cost": {}}}, dimMap, mtxMap)
+	got, err = normalizeACL(model.ACL{ColTenants: map[string][]string{"cost": {}}}, dimMap, nil, mtxMap)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestNormalizeACLAllowsDimOrMtxKey(t *testing.T) {
 
 	if _, err := normalizeACL(model.ACL{
 		ColTenants: map[string][]string{"stat_date": {"t1"}, "cost": {"t2"}},
-	}, dimMap, mtxMap); err != nil {
+	}, dimMap, nil, mtxMap); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -124,7 +124,7 @@ func TestNormalizeACLRejectsUnknownColumn(t *testing.T) {
 
 	_, err := normalizeACL(model.ACL{
 		ColTenants: map[string][]string{"stat_datee": {"t1"}},
-	}, dimMap, mtxMap)
+	}, dimMap, nil, mtxMap)
 	if err == nil {
 		t.Fatal("expected error for unknown column in col_tenants")
 	}

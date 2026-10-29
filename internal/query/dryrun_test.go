@@ -9,7 +9,7 @@ func TestBuildDryRunSQL(t *testing.T) {
 	dims := map[string]string{"date": "stat_date", "city": "city_code"}
 	mtxs := map[string]string{"cost": "sum(stat_cost)"}
 
-	sql, keys, err := BuildDryRunSQL("select 1", dims, mtxs)
+	sql, keys, err := BuildDryRunSQL("select 1", dims, nil, mtxs)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -52,7 +52,7 @@ func TestBuildDryRunSQL(t *testing.T) {
 	})
 
 	t.Run("只有指标时不加 GROUP BY", func(t *testing.T) {
-		s2, _, err := BuildDryRunSQL("select 1", nil, mtxs)
+		s2, _, err := BuildDryRunSQL("select 1", nil, nil, mtxs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,7 +62,7 @@ func TestBuildDryRunSQL(t *testing.T) {
 	})
 
 	t.Run("只有维度时不加 GROUP BY", func(t *testing.T) {
-		s2, _, err := BuildDryRunSQL("select 1", dims, nil)
+		s2, _, err := BuildDryRunSQL("select 1", dims, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +72,7 @@ func TestBuildDryRunSQL(t *testing.T) {
 	})
 
 	t.Run("末尾分号会被去掉", func(t *testing.T) {
-		s2, _, err := BuildDryRunSQL("select 1;", dims, mtxs)
+		s2, _, err := BuildDryRunSQL("select 1;", dims, nil, mtxs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,14 +84,14 @@ func TestBuildDryRunSQL(t *testing.T) {
 
 func TestBuildDryRunSQLErrors(t *testing.T) {
 	t.Run("表达式为空要报错而不是拼出坏 SQL", func(t *testing.T) {
-		_, _, err := BuildDryRunSQL("select 1", map[string]string{"cost": ""}, nil)
+		_, _, err := BuildDryRunSQL("select 1", map[string]string{"cost": ""}, nil, nil)
 		if err == nil {
 			t.Fatal("want error")
 		}
 	})
 
 	t.Run("两个 map 都空要报错", func(t *testing.T) {
-		if _, _, err := BuildDryRunSQL("select 1", nil, nil); err == nil {
+		if _, _, err := BuildDryRunSQL("select 1", nil, nil, nil); err == nil {
 			t.Fatal("want error")
 		}
 	})
@@ -99,6 +99,7 @@ func TestBuildDryRunSQLErrors(t *testing.T) {
 	t.Run("同名键不会生成重复别名", func(t *testing.T) {
 		sql, keys, err := BuildDryRunSQL("select 1",
 			map[string]string{"cost": "stat_cost"},
+			nil,
 			map[string]string{"cost": "sum(stat_cost)"})
 		if err != nil {
 			t.Fatal(err)
@@ -112,6 +113,59 @@ func TestBuildDryRunSQLErrors(t *testing.T) {
 		// 指标优先：同一键在两侧都有时，以指标表达式为准
 		if !strings.Contains(sql, "sum(stat_cost)") {
 			t.Fatalf("got:\n%s", sql)
+		}
+	})
+}
+
+// 多值维度在自检 SQL 里必须被包成收拢表达式，否则「有维度 + 有收拢函数」
+// 会被 ClickHouse 判为缺 GROUP BY，让人以为是配置写错了。
+func TestBuildDryRunSQLWithMultiDim(t *testing.T) {
+	dims := map[string]string{"uid": "uid"}
+	multi := map[string]string{"companies": "companies"}
+	mtxs := map[string]string{"cost": "sum(stat_cost)"}
+
+	t.Run("收拢表达式带 arraySort 保证顺序稳定", func(t *testing.T) {
+		sql, _, err := BuildDryRunSQL("select 1", dims, multi, mtxs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(sql, "arrayStringConcat(arraySort(groupUniqArrayArray(companies)), ',') AS `companies`") {
+			t.Fatalf("got:\n%s", sql)
+		}
+	})
+
+	t.Run("有收拢表达式就得给普通维度补 GROUP BY", func(t *testing.T) {
+		sql, _, err := BuildDryRunSQL("select 1", dims, multi, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(sql, "GROUP BY uid") {
+			t.Fatalf("got:\n%s", sql)
+		}
+	})
+
+	t.Run("只有多值维度时不加 GROUP BY", func(t *testing.T) {
+		sql, _, err := BuildDryRunSQL("select 1", nil, multi, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(sql, "GROUP BY") {
+			t.Fatalf("全表收拢不该加 GROUP BY，got:\n%s", sql)
+		}
+	})
+
+	t.Run("指标优先于多值维度", func(t *testing.T) {
+		sql, keys, err := BuildDryRunSQL("select 1", nil,
+			map[string]string{"x": "companies"},
+			map[string]string{"x": "sum(cost)"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(keys) != 1 {
+			t.Fatalf("keys = %v", keys)
+		}
+		if strings.Contains(sql, "groupUniqArrayArray") {
+			t.Fatalf("同名键下指标应胜出，got:\n%s", sql)
 		}
 	})
 }

@@ -25,6 +25,30 @@ const STAGE_LABEL: Record<string, string> = {
   expr: '维度/指标表达式有问题',
 };
 
+// 三种字段类型的全部字段名，用于「继承提示」「补齐中文名」「col_tenants 可选列」。
+function allFieldKeys(...maps: StringMap[]): string[] {
+  const out = new Set<string>();
+  for (const m of maps) for (const k of Object.keys(m)) out.add(k);
+  return [...out].sort();
+}
+
+// 同一个 key 挂两种类型时后端会拒绝保存，先在前端算出来提示。
+function findKeyConflicts(...maps: StringMap[]): Array<{ key: string; kinds: string[] }> {
+  const owners = new Map<string, string[]>();
+  const names = ['dim_map', 'multi_dim_map', 'mtx_map'];
+  maps.forEach((m, i) => {
+    for (const k of Object.keys(m)) {
+      const list = owners.get(k) ?? [];
+      list.push(names[i] ?? `map${i}`);
+      owners.set(k, list);
+    }
+  });
+  return [...owners.entries()]
+    .filter(([, kinds]) => kinds.length > 1)
+    .map(([key, kinds]) => ({ key, kinds }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
 interface Props {
   open: boolean;
   record: DatasetConfig | null; // null 表示新建
@@ -50,6 +74,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   const [name, setName] = useState('');
   const [midSQL, setMidSQL] = useState('');
   const [dimMap, setDimMap] = useState<StringMap>({});
+  const [multiDimMap, setMultiDimMap] = useState<StringMap>({});
   const [mtxMap, setMtxMap] = useState<StringMap>({});
   const [labelMap, setLabelMap] = useState<StringMap>({});
   const [aclText, setAclText] = useState('{}');
@@ -67,7 +92,9 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
     }
     setDryRunning(true);
     try {
-      setDryResult(await dryRunDataset({ mid_sql: midSQL, dim_map: dimMap, mtx_map: mtxMap }));
+      setDryResult(
+        await dryRunDataset({ mid_sql: midSQL, dim_map: dimMap, multi_dim_map: multiDimMap, mtx_map: mtxMap }),
+      );
     } catch (e) {
       message.error((e as Error).message || '自检请求失败');
     } finally {
@@ -86,13 +113,17 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   // 列出来是为了让人知道「我没配不代表没名字」，也方便发现同名不同义。
   const inheritedPreview = useMemo(() => {
     const out: Array<[string, string]> = [];
-    for (const k of [...Object.keys(dimMap), ...Object.keys(mtxMap)]) {
+    for (const k of allFieldKeys(dimMap, multiDimMap, mtxMap)) {
       if (k in labelMap) continue;
       const g = globalLabels[k];
       if (g) out.push([k, g]);
     }
     return out;
-  }, [dimMap, mtxMap, labelMap, globalLabels]);
+  }, [dimMap, multiDimMap, mtxMap, labelMap, globalLabels]);
+
+  // 同一个字段名挂在两种类型上，后端会直接拒绝保存。
+  // 这里先算出来提示，避免填完一整屏才被一句 400 打回来。
+  const keyConflicts = useMemo(() => findKeyConflicts(dimMap, multiDimMap, mtxMap), [dimMap, multiDimMap, mtxMap]);
 
   useEffect(() => {
     if (!open) return;
@@ -102,6 +133,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setName(record.dataset_name);
       setMidSQL(record.mid_sql);
       setDimMap(record.dim_map ?? {});
+      setMultiDimMap(record.multi_dim_map ?? {});
       setMtxMap(record.mtx_map ?? {});
       setLabelMap(record.label_map ?? {});
       setAclText(JSON.stringify(record.acl ?? {}, null, 2));
@@ -111,6 +143,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setName('');
       setMidSQL('');
       setDimMap({});
+      setMultiDimMap({});
       setMtxMap({});
       setLabelMap({});
       setAclText('{}');
@@ -118,10 +151,10 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
     }
   }, [open, record]);
 
-  // 把 dim_map / mtx_map 里还没配中文名的键补进来，省得逐个手敲
+  // 把 dim_map / multi_dim_map / mtx_map 里还没配中文名的键补进来，省得逐个手敲
   const fillLabels = () => {
     const next: StringMap = { ...labelMap };
-    for (const k of [...Object.keys(dimMap), ...Object.keys(mtxMap)]) {
+    for (const k of allFieldKeys(dimMap, multiDimMap, mtxMap)) {
       if (!(k in next)) next[k] = '';
     }
     setLabelMap(next);
@@ -214,6 +247,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           dataset_name: name.trim(),
           mid_sql: midSQL,
           dim_map: dimMap,
+          multi_dim_map: multiDimMap,
           mtx_map: mtxMap,
           label_map: labelMap,
           acl: parsedACL,
@@ -227,6 +261,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           dataset_name: name.trim(),
           mid_sql: midSQL,
           dim_map: dimMap,
+          multi_dim_map: multiDimMap,
           mtx_map: mtxMap,
           label_map: labelMap,
           acl: parsedACL,
@@ -386,12 +421,57 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           )}
         </Form.Item>
 
-        <Form.Item label="dim_map" extra="map[string]string，可用表格或 JSON 两种方式编辑">
+        {keyConflicts.length > 0 && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="字段名重复"
+            description={keyConflicts.map((c) => `${c.key}：同时出现在 ${c.kinds.join(' 和 ')}`).join('；') + '。一个字段只能是维度、多值维度、指标中的一种。'}
+          />
+        )}
+
+        <Form.Item
+          label="dim_map"
+          extra="map[string]string，可用表格或 JSON 两种方式编辑。这些维度会进 GROUP BY"
+        >
           <StringMapEditor
             value={dimMap}
             onChange={setDimMap}
             placeholderKey="维度名，例如 city"
             placeholderValue="映射表达式，例如 city_code"
+          />
+        </Form.Item>
+
+        <Form.Item
+          label={
+            <Space>
+              <span>multi_dim_map</span>
+              <Tag color="purple">多值维度</Tag>
+            </Space>
+          }
+          extra={
+            <Space direction="vertical" size={2}>
+              <span>
+                一个字段有多个取值的场景：一个人属于多个公司、一个订单打了多个标签。
+                表达式要产出数组（如 <Typography.Text code>companies</Typography.Text> 或{' '}
+                <Typography.Text code>groupArray(tags)</Typography.Text>）。
+              </span>
+              <span>
+                它与普通维度的唯一区别是<strong>不进 GROUP BY</strong>：查询时会被收拢成
+                「公司A,公司B」这样的一个值，而不是按取值拆成多行。
+              </span>
+              <span>
+                以前这类字段只能塞进 mtx_map 顶着——它是维度，只是恰好需要聚合，语义是错的。
+              </span>
+            </Space>
+          }
+        >
+          <StringMapEditor
+            value={multiDimMap}
+            onChange={setMultiDimMap}
+            placeholderKey="多值维度名，例如 companies"
+            placeholderValue="产出数组的表达式，例如 companies"
           />
         </Form.Item>
 
@@ -496,11 +576,11 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
                 配置了则登录态租户与白名单有交集才可见。
               </span>
               <Typography.Text code>
-                {`{"tenants": ["t1","t2"], "col_tenants": {"${[...Object.keys(dimMap), ...Object.keys(mtxMap)][0] ?? 'cost'}": ["t1"]}, "row_filter": {"tenant": {"enabled": true, "column": "${Object.keys(dimMap)[0] ?? 'tenant'}"}}}`}
+                {`{"tenants": ["t1","t2"], "col_tenants": {"${allFieldKeys(dimMap, multiDimMap, mtxMap)[0] ?? 'cost'}": ["t1"]}, "row_filter": {"tenant": {"enabled": true, "column": "${Object.keys(dimMap)[0] ?? 'tenant'}"}}}`}
               </Typography.Text>
               <span>
                 col_tenants 的 key 必须是下面的维度或指标名之一：
-                {[...Object.keys(dimMap), ...Object.keys(mtxMap)].join('、') || '（请先填维度/指标）'}
+                {allFieldKeys(dimMap, multiDimMap, mtxMap).join('、') || '（请先填维度/指标）'}
               </span>
               <span>上面的行级权限控件会同步写入这段 JSON 的 row_filter 字段。</span>
             </Space>

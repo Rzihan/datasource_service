@@ -46,7 +46,11 @@ export default function LabelList() {
       const res = await fetchList({ page: 1, size: REF_SCAN_SIZE });
       const acc: Record<string, string[]> = {};
       for (const ds of res.items ?? []) {
-        for (const k of [...Object.keys(ds.dim_map ?? {}), ...Object.keys(ds.mtx_map ?? {})]) {
+        for (const k of [
+          ...Object.keys(ds.dim_map ?? {}),
+          ...Object.keys(ds.multi_dim_map ?? {}),
+          ...Object.keys(ds.mtx_map ?? {}),
+        ]) {
           (acc[k] ??= []).push(ds.dataset_key);
         }
       }

@@ -59,6 +59,10 @@ func (s *DatasetService) Create(ctx context.Context, req *model.CreateRequest, o
 	if err != nil {
 		return nil, err
 	}
+	multiDimMap, err := normalizeStringMap(req.MultiDimMap, "multi_dim_map")
+	if err != nil {
+		return nil, err
+	}
 	mtxMap, err := normalizeStringMap(req.MtxMap, "mtx_map")
 	if err != nil {
 		return nil, err
@@ -67,7 +71,10 @@ func (s *DatasetService) Create(ctx context.Context, req *model.CreateRequest, o
 	if err != nil {
 		return nil, err
 	}
-	acl, err := normalizeACL(req.ACL, dimMap, mtxMap)
+	if err := checkFieldKeyUnique(dimMap, multiDimMap, mtxMap); err != nil {
+		return nil, err
+	}
+	acl, err := normalizeACL(req.ACL, dimMap, multiDimMap, mtxMap)
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +92,7 @@ func (s *DatasetService) Create(ctx context.Context, req *model.CreateRequest, o
 		DatasetName: name,
 		MidSQL:      req.MidSQL,
 		DimMap:      dimMap,
+		MultiDimMap: multiDimMap,
 		MtxMap:      mtxMap,
 		LabelMap:    labelMap,
 		ACL:         acl,
@@ -161,6 +169,10 @@ func (s *DatasetService) Update(ctx context.Context, key string, req *model.Upda
 	if err != nil {
 		return nil, err
 	}
+	multiDimMap, err := normalizeStringMap(req.MultiDimMap, "multi_dim_map")
+	if err != nil {
+		return nil, err
+	}
 	mtxMap, err := normalizeStringMap(req.MtxMap, "mtx_map")
 	if err != nil {
 		return nil, err
@@ -169,7 +181,10 @@ func (s *DatasetService) Update(ctx context.Context, key string, req *model.Upda
 	if err != nil {
 		return nil, err
 	}
-	acl, err := normalizeACL(req.ACL, dimMap, mtxMap)
+	if err := checkFieldKeyUnique(dimMap, multiDimMap, mtxMap); err != nil {
+		return nil, err
+	}
+	acl, err := normalizeACL(req.ACL, dimMap, multiDimMap, mtxMap)
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +201,7 @@ func (s *DatasetService) Update(ctx context.Context, key string, req *model.Upda
 		DatasetName: name,
 		MidSQL:      req.MidSQL,
 		DimMap:      dimMap,
+		MultiDimMap: multiDimMap,
 		MtxMap:      mtxMap,
 		LabelMap:    labelMap,
 		ACL:         acl,
@@ -260,6 +276,7 @@ func (s *DatasetService) Rollback(ctx context.Context, key string, req *model.Ro
 		DatasetName: snap.DatasetName,
 		MidSQL:      snap.MidSQL,
 		DimMap:      snap.DimMap,
+		MultiDimMap: snap.MultiDimMap,
 		MtxMap:      snap.MtxMap,
 		LabelMap:    snap.LabelMap,
 		ACL:         snap.ACL,
@@ -299,16 +316,48 @@ func (s *DatasetService) Validate(ctx context.Context, req *model.ValidateReques
 	if _, err := normalizeStringMap(req.DimMap, "dim_map"); err != nil {
 		return err
 	}
+	if _, err := normalizeStringMap(req.MultiDimMap, "multi_dim_map"); err != nil {
+		return err
+	}
 	if _, err := normalizeStringMap(req.MtxMap, "mtx_map"); err != nil {
 		return err
 	}
 	if _, err := normalizeStringMap(req.LabelMap, "label_map"); err != nil {
 		return err
 	}
-	if _, err := normalizeACL(req.ACL, req.DimMap, req.MtxMap); err != nil {
+	if err := checkFieldKeyUnique(req.DimMap, req.MultiDimMap, req.MtxMap); err != nil {
+		return err
+	}
+	if _, err := normalizeACL(req.ACL, req.DimMap, req.MultiDimMap, req.MtxMap); err != nil {
 		return err
 	}
 	return nil
+}
+
+// checkFieldKeyUnique 同一个字段名只能属于一种类型。
+//
+// 存在的原因：三种字段类型的处理完全不同（进不进 GROUP BY、是不是聚合函数），
+// 一个 key 挂两种类型时，生成 SQL 的一端只能二选一——选了谁都是静默的错。
+// 与其让它在查询时表现为「重复列名」或「结果莫名少一半」，不如在保存时就挡住。
+func checkFieldKeyUnique(dimMap, multiDimMap, mtxMap map[string]string) error {
+	seen := make(map[string]string, len(dimMap)+len(multiDimMap)+len(mtxMap))
+	put := func(m map[string]string, kind string) error {
+		for k := range m {
+			if prev, ok := seen[k]; ok {
+				return fmt.Errorf("%w: 字段 %q 同时出现在 %s 和 %s 中，一个字段只能是维度、多值维度、指标中的一种",
+					ErrInvalid, k, prev, kind)
+			}
+			seen[k] = kind
+		}
+		return nil
+	}
+	if err := put(dimMap, "dim_map"); err != nil {
+		return err
+	}
+	if err := put(multiDimMap, "multi_dim_map"); err != nil {
+		return err
+	}
+	return put(mtxMap, "mtx_map")
 }
 
 // checkMidSQL 只校验长度。mid_sql 的内容不做任何语法或语义校验（按需求约定）。
@@ -353,7 +402,7 @@ func normalizeTenantList(in []string, field string) ([]string, error) {
 //     ——null 会被 JSON 函数当成「有一个元素」，把「不限制」误判成「受限」
 //   - col_tenants 的 key 必须是该数据集 dim_map / mtx_map 的键：
 //     拼错 key 会让该列静默保持可见（权限配置 fail-open），所以必须挡住并报清楚
-func normalizeACL(a model.ACL, dimMap, mtxMap map[string]string) (model.ACL, error) {
+func normalizeACL(a model.ACL, dimMap, multiDimMap, mtxMap map[string]string) (model.ACL, error) {
 	tenants, err := normalizeTenantList(a.Tenants, "acl.tenants")
 	if err != nil {
 		return model.ACL{}, err
@@ -366,9 +415,10 @@ func normalizeACL(a model.ACL, dimMap, mtxMap map[string]string) (model.ACL, err
 			return model.ACL{}, fmt.Errorf("%w: acl.col_tenants 存在空的列名", ErrInvalid)
 		}
 		_, isDim := dimMap[col]
+		_, isMulti := multiDimMap[col]
 		_, isMtx := mtxMap[col]
-		if !isDim && !isMtx {
-			return model.ACL{}, fmt.Errorf("%w: acl.col_tenants 的 %q 不是该数据集的维度或指标", ErrInvalid, col)
+		if !isDim && !isMulti && !isMtx {
+			return model.ACL{}, fmt.Errorf("%w: acl.col_tenants 的 %q 不是该数据集的维度、多值维度或指标", ErrInvalid, col)
 		}
 		norm, err := normalizeTenantList(list, fmt.Sprintf("acl.col_tenants[%q]", col))
 		if err != nil {

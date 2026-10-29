@@ -94,6 +94,16 @@ type DatasetConfig struct {
 	MidSQL      string            `json:"mid_sql" gorm:"column:mid_sql;type:mediumtext;not null"`
 	DimMap      map[string]string `json:"dim_map" gorm:"column:dim_map;type:json;serializer:json;not null"`
 	MtxMap      map[string]string `json:"mtx_map" gorm:"column:mtx_map;type:json;serializer:json;not null"`
+	// MultiDimMap 多值维度：key 是维度名，value 是「产出数组」的表达式。
+	//
+	// 典型场景：一个人属于多个公司、一个订单打了多个标签。这类字段
+	// 放进 GROUP BY 会按值拆成多行，而业务要看的恰恰是「一行里展示他属于哪几个」。
+	// 所以它走的是另一条路：SELECT 里用聚合函数把多个取值收拢成一个展示值，
+	// **并且不进 GROUP BY**。
+	//
+	// 之前只能把它塞进 mtx_map 当指标，语义是错的——它是维度，只是需要聚合。
+	// 这里是第三种字段类型：出现在维度下拉、但生成聚合表达式。
+	MultiDimMap map[string]string `json:"multi_dim_map" gorm:"column:multi_dim_map;type:json;serializer:json;not null"`
 	// LabelMap 描述维度与指标的中文含义，key 是 dim_map / mtx_map 里的键。
 	// 只影响展示（勾选控件、表头），不参与 SQL 生成。
 	LabelMap map[string]string `json:"label_map" gorm:"column:label_map;type:json;serializer:json;not null"`
@@ -119,6 +129,7 @@ type CreateRequest struct {
 	DatasetName string            `json:"dataset_name"`
 	MidSQL      string            `json:"mid_sql"`
 	DimMap      map[string]string `json:"dim_map"`
+	MultiDimMap map[string]string `json:"multi_dim_map"`
 	MtxMap      map[string]string `json:"mtx_map"`
 	LabelMap    map[string]string `json:"label_map"`
 	ACL         ACL               `json:"acl"`
@@ -130,6 +141,7 @@ type UpdateRequest struct {
 	DatasetName string            `json:"dataset_name"`
 	MidSQL      string            `json:"mid_sql"`
 	DimMap      map[string]string `json:"dim_map"`
+	MultiDimMap map[string]string `json:"multi_dim_map"`
 	MtxMap      map[string]string `json:"mtx_map"`
 	LabelMap    map[string]string `json:"label_map"`
 	ACL         ACL               `json:"acl"`
@@ -139,10 +151,11 @@ type UpdateRequest struct {
 
 // ValidateRequest 只校验不落库的请求体，供前端实时校验使用。
 type ValidateRequest struct {
-	DimMap   map[string]string `json:"dim_map"`
-	MtxMap   map[string]string `json:"mtx_map"`
-	LabelMap map[string]string `json:"label_map"`
-	ACL      ACL               `json:"acl"`
+	DimMap      map[string]string `json:"dim_map"`
+	MultiDimMap map[string]string `json:"multi_dim_map"`
+	MtxMap      map[string]string `json:"mtx_map"`
+	LabelMap    map[string]string `json:"label_map"`
+	ACL         ACL               `json:"acl"`
 }
 
 // 历史动作类型。

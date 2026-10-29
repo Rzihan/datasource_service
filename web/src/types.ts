@@ -35,6 +35,9 @@ export interface QueryDataset {
   dataset_key: string;
   dataset_name: string;
   dim_map: StringMap;
+  // 多值维度：出现在维度下拉里，但值是收拢后的（如「公司A,公司B」）。
+  // 前端要把它合并进维度列表，并给用户一个「多值」标记。
+  multi_dim_map: StringMap;
   mtx_map: StringMap;
   label_map: StringMap;
 }
@@ -45,6 +48,7 @@ export interface DatasetConfig {
   dataset_name: string;
   mid_sql: string;
   dim_map: StringMap;
+  multi_dim_map: StringMap;
   mtx_map: StringMap;
   label_map: StringMap;
   acl: ACL;
@@ -68,6 +72,7 @@ export interface CreatePayload {
   dataset_name: string;
   mid_sql: string;
   dim_map: StringMap;
+  multi_dim_map: StringMap;
   mtx_map: StringMap;
   label_map: StringMap;
   acl: ACL;
@@ -132,6 +137,7 @@ export interface UpdatePayload {
   dataset_name: string;
   mid_sql: string;
   dim_map: StringMap;
+  multi_dim_map: StringMap;
   mtx_map: StringMap;
   label_map: StringMap;
   acl: ACL;
@@ -206,7 +212,7 @@ export interface LabelOrphan {
 
 // 配置自检结果。失败时不走错误码：诊断信息装在 result 里更有用。
 // stage 指出问题出在哪一步：template=模板语法 / mid=mid_sql 本身 /
-// expr=dim_map 或 mtx_map 的表达式。
+// expr=dim_map / multi_dim_map / mtx_map 的表达式。
 export interface DryRunResult {
   ok: boolean;
   stage?: string;

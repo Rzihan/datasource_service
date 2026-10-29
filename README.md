@@ -7,7 +7,8 @@ dataset 配置的增删改查服务。一条配置包含五个字段：
 | `dataset_key` | varchar(64) | 业务主键，全局唯一，强制小写 |
 | `dataset_name` | varchar(128) | 展示名 |
 | `mid_sql` | mediumtext | 中间层 SQL，**纯文本存储，不做语法/语义校验** |
-| `dim_map` | json | 维度映射，`map[string]string` |
+| `dim_map` | json | 维度映射，`map[string]string`，这些维度会进 `GROUP BY` |
+| `multi_dim_map` | json | **多值维度**映射，`map[string]string`，value 产出数组；收拢展示、**不进 GROUP BY**（见「多值维度」一节） |
 | `mtx_map` | json | 指标映射，`map[string]string` |
 | `label_map` | json | 维度/指标的中文含义，`map[string]string`，**只影响展示**，不参与 SQL 生成。它是**覆盖层**：留空则继承全局字典（见下节） |
 
@@ -354,6 +355,30 @@ LIMIT 1000
 
 **维度过滤与指标过滤**：过滤条件树的叶子 `field` 可以是 `dim_map` 的键，也可以是 `mtx_map` 的键。
 前者落到 `WHERE`（先筛行再聚合），后者落到 `HAVING`（先聚合再筛结果），两者语义不同，必须分开。
+
+### 多值维度：收拢而不是展开
+
+有些字段一个主体有多个取值：一个人属于多个公司、一个订单打了多个标签。这类字段放进
+`GROUP BY` 会按取值拆成多行，而业务要看的恰恰是**一行里展示他属于哪几个**。
+
+所以它走第三条路：`multi_dim_map`。它的身份是**维度**（出现在维度下拉里、共用同一套中文名），
+只是取值方式不同——生成 SQL 时会被包成
+
+```sql
+arrayStringConcat(arraySort(groupUniqArrayArray(companies)), ',') AS `companies`
+```
+
+三个关键点：
+
+1. **不进 `GROUP BY`**。进了就变成「一人一行一个公司」，那正是业务不要的结果。
+2. **不是 `arrayJoin`**。`arrayJoin` 把一行复制成 N 行，是展开；这里要的是收拢。
+3. **`arraySort` 不是可选的**。元素顺序不固定的话，同一份数据每次得到不同的字符串，
+   结果看着会「莫名变动」，也无从比对。
+
+以前这类字段只能塞进 `mtx_map` 当指标顶着——它是维度，只是恰好需要聚合，语义是错的。
+
+约束：同一个字段名只能属于 `dim_map` / `multi_dim_map` / `mtx_map` 中的一种，
+重复会在保存时被拒绝（400），编辑页也会提前给出提示。
 
 ### mid_sql 模板：按查询裁剪 JOIN
 

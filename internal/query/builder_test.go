@@ -114,6 +114,58 @@ func TestBuildNoDims(t *testing.T) {
 	}
 }
 
+// 多值维度是这一版的核心：它出现在维度下拉里，但生成的是聚合表达式，
+// 而且**不能进 GROUP BY**——进了就变成「一人一行一个公司」，那正是业务不要的结果。
+func TestBuildMultiDim(t *testing.T) {
+	t.Run("收拢成聚合表达式且不进 GROUP BY", func(t *testing.T) {
+		spec := baseSpec()
+		spec.MultiDimMap = map[string]string{"companies": "companies"}
+		spec.Dims = []string{"date", "companies"}
+		sql, _, err := Build(spec)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(sql, "arrayStringConcat(arraySort(groupUniqArrayArray(companies)), ',') AS `companies`") {
+			t.Fatalf("多值维度应被收拢，got:\n%s", sql)
+		}
+		// GROUP BY 里只能有普通维度
+		idx := strings.Index(sql, "GROUP BY ")
+		if idx < 0 {
+			t.Fatalf("缺少 GROUP BY:\n%s", sql)
+		}
+		groupPart := sql[idx:]
+		end := strings.Index(groupPart, "\n")
+		if end < 0 {
+			end = len(groupPart)
+		}
+		if strings.Contains(groupPart[:end], "companies") {
+			t.Fatalf("多值维度不该进 GROUP BY:\n%s", sql)
+		}
+	})
+
+	t.Run("只选多值维度时不加 GROUP BY", func(t *testing.T) {
+		spec := baseSpec()
+		spec.MultiDimMap = map[string]string{"companies": "companies"}
+		spec.Dims = []string{"companies"}
+		spec.Metrics = nil
+		sql, _, err := Build(spec)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if strings.Contains(sql, "GROUP BY") {
+			t.Fatalf("全表收拢不该加 GROUP BY:\n%s", sql)
+		}
+	})
+
+	t.Run("多值维度不在任何 map 里仍然报错", func(t *testing.T) {
+		spec := baseSpec()
+		spec.Dims = []string{"nope"}
+		if _, _, err := Build(spec); !errors.Is(err, ErrInvalidQuery) {
+			t.Fatalf("want ErrInvalidQuery, got %v", err)
+		}
+	})
+}
+
 func TestBuildRejects(t *testing.T) {
 	cases := []struct {
 		name   string

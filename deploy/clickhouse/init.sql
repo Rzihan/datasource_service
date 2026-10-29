@@ -11,7 +11,10 @@ CREATE TABLE IF NOT EXISTS demo.t_order_dtl
     channel   Nullable(String),     -- 可空维度，用于验证 NULL 的渲染
     stat_cost Decimal(18, 2),       -- 金额，验证 Decimal 不被 float64 吃掉精度
     clicks    UInt64,
-    uid       String
+    uid       String,
+    -- 多值维度：一个人同时属于多个公司 / 一个订单打了多个标签。
+    -- 这类字段不能放进 GROUP BY（会按公司拆成多行），展示上要收拢成一个值。
+    companies Array(String)
 )
 ENGINE = MergeTree
 ORDER BY (stat_date, city_code);
@@ -26,7 +29,19 @@ SELECT
     -- 除以 100 得到带两位小数的金额（n + 0.15），用 Decimal 而非 Float 存储
     toDecimal64((number % 5000) * 100 + 15, 2) / 100                    AS stat_cost,
     toUInt64(rand() % 5000 + 1)                                        AS clicks,
-    concat('u', toString(number % 2000))                               AS uid
+    concat('u', toString(number % 2000))                               AS uid,
+    -- 每行 1~3 个公司，刻意让「同一个 uid 有多行、公司之间有重叠」，
+    -- 才能验证收拢（groupUniqArrayArray）而不是展开（arrayJoin）
+    arrayFilter(
+        x -> x != '',
+        arrayDistinct(
+            array(
+                ['公司A', '公司B', '公司C'][toInt32(number % 3) + 1],
+                if(number % 4 = 0, '公司B', ''),
+                if(number % 5 = 0, '公司C', '')
+            )
+        )
+    )                                                                  AS companies
 FROM numbers(5000);
 
 -- 只读账号：查询服务用它连接，避免有人误写或拖库

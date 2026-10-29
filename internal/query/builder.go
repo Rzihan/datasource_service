@@ -16,8 +16,11 @@ type Spec struct {
 	DatasetKey string
 	MidSQL     string
 	DimMap     map[string]string
-	MtxMap     map[string]string
-	Dims       []string
+	// MultiDimMap 多值维度：key 是维度名，value 是产出数组的表达式。
+	// 这类维度收拢展示、不进 GROUP BY，见 multiDimCollect。
+	MultiDimMap map[string]string
+	MtxMap      map[string]string
+	Dims        []string
 	Metrics    []string
 	// Filter 是过滤条件树，支持 AND / OR 任意嵌套；为 nil 表示不加过滤。
 	Filter *FilterNode
@@ -67,9 +70,15 @@ func Build(spec Spec) (string, []Param, error) {
 	var groupParts []string
 
 	for _, dim := range spec.Dims {
+		// 多值维度：收拢成一个展示值，**不进 GROUP BY**。
+		// 进了 GROUP BY 就变成「一人一行一个公司」，那正是业务不要的结果。
+		if expr, ok := spec.MultiDimMap[dim]; ok {
+			selectParts = append(selectParts, fmt.Sprintf("%s AS %s", multiDimCollect(expr), quote(dim)))
+			continue
+		}
 		expr, ok := spec.DimMap[dim]
 		if !ok {
-			return "", nil, fmt.Errorf("%w: 维度 %q 不在该数据集的 dim_map 中", ErrInvalidQuery, dim)
+			return "", nil, fmt.Errorf("%w: 维度 %q 不在该数据集的 dim_map / multi_dim_map 中", ErrInvalidQuery, dim)
 		}
 		selectParts = append(selectParts, fmt.Sprintf("%s AS %s", expr, quote(dim)))
 		groupParts = append(groupParts, expr)
@@ -414,6 +423,19 @@ func quote(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
+// multiDimCollect 生成多值维度的「收拢」表达式：把分组内所有行的数组拍平、
+// 去重、排序，最后拼成一个字符串。
+//
+// 为什么不是 arrayJoin：arrayJoin 会把一行复制成 N 行（一人一行一个公司），
+// 业务要看的是「这个人属于哪几个公司」，是一行里的一个合并值。
+// 所以这里必须用聚合函数把多个取值收拢，而不是展开。
+//
+// arraySort 是为了让同一组数据每次得到同一个字符串——否则元素顺序随机，
+// 结果看着会「莫名变动」，也无从比对。
+func multiDimCollect(expr string) string {
+	return fmt.Sprintf("arrayStringConcat(arraySort(groupUniqArrayArray(%s)), ',')", strings.TrimSpace(expr))
+}
+
 // BuildDryRunMidSQL 自检第一步的 SQL：只跑 mid_sql 本身，取它实际输出的列。
 //
 // 单独跑这一步是为了能区分两种错误：
@@ -431,16 +453,23 @@ func BuildDryRunMidSQL(midSQL string) string {
 // toDate(ts)、sum(if(...)) 这类改造过的表达式——而写错的恰恰通常是这些。
 //
 // 返回的 keys 与 SELECT 列表一一对应，便于把 ClickHouse 的报错对回具体字段。
-func BuildDryRunSQL(midSQL string, dims, mtxs map[string]string) (string, []string, error) {
+func BuildDryRunSQL(midSQL string, dims, multiDims, mtxs map[string]string) (string, []string, error) {
 	mid := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(midSQL), ";"))
 
-	// 一个键同时出现在 dim / mtx 里是配置错误，别让它在 SQL 里变成重复别名
-	exprOf := make(map[string]string, len(dims)+len(mtxs))
+	// 一个键同时出现在多处是配置错误，这里按 dim → multi → mtx 的优先级覆盖，
+	// 避免在 SQL 里变成重复别名；指标优先是因为它是最"重"的形态。
+	exprOf := make(map[string]string, len(dims)+len(multiDims)+len(mtxs))
+	collect := make(map[string]bool, len(multiDims))
 	for k, v := range dims {
 		exprOf[k] = v
 	}
+	for k, v := range multiDims {
+		exprOf[k] = v
+		collect[k] = true
+	}
 	for k, v := range mtxs {
 		exprOf[k] = v
+		collect[k] = false // 指标优先
 	}
 	keys := make([]string, 0, len(exprOf))
 	for k := range exprOf {
@@ -454,10 +483,14 @@ func BuildDryRunSQL(midSQL string, dims, mtxs map[string]string) (string, []stri
 		if expr == "" {
 			return "", nil, fmt.Errorf("%w: %q 的表达式为空", ErrInvalidQuery, k)
 		}
+		if collect[k] {
+			parts = append(parts, fmt.Sprintf("%s AS %s", multiDimCollect(expr), quote(k)))
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%s AS %s", expr, quote(k)))
 	}
 	if len(parts) == 0 {
-		return "", nil, fmt.Errorf("%w: dim_map 与 mtx_map 都是空的，没有可校验的字段", ErrInvalidQuery)
+		return "", nil, fmt.Errorf("%w: dim_map、multi_dim_map 与 mtx_map 都是空的，没有可校验的字段", ErrInvalidQuery)
 	}
 
 	var sb strings.Builder
@@ -471,7 +504,8 @@ func BuildDryRunSQL(midSQL string, dims, mtxs map[string]string) (string, []stri
 	// 有指标又有维度时必须 GROUP BY，否则 ClickHouse 会报
 	// "Column x is not under aggregate function and not in GROUP BY keys"——
 	// 那是自检 SQL 自己缺 GROUP BY，不是配置写错了，会误导人。
-	if len(mtxs) > 0 && len(dims) > 0 {
+	// 收拢表达式和指标一样是聚合函数，只要出现就得给普通维度补 GROUP BY
+	if (len(mtxs) > 0 || len(multiDims) > 0) && len(dims) > 0 {
 		groups := make([]string, 0, len(dims))
 		for _, k := range sortedKeys(dims) {
 			groups = append(groups, strings.TrimSpace(dims[k]))

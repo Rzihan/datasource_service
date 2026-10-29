@@ -92,16 +92,18 @@ func (s *Service) VisibleDatasets(ctx context.Context, tenants []string) ([]Quer
 			continue
 		}
 		dims := filterColumns(it.DimMap, it.ACL, tenants)
+		multiDims := filterColumns(it.MultiDimMap, it.ACL, tenants)
 		mtxs := filterColumns(it.MtxMap, it.ACL, tenants)
 		out = append(out, QueryDataset{
 			DatasetKey:  it.DatasetKey,
 			DatasetName: it.DatasetName,
 			DimMap:      dims,
+			MultiDimMap: multiDims,
 			MtxMap:      mtxs,
 			// 只对「当前数据集真的有、且当前登录态看得见」的列生成中文名：
-			// 以 dim_map / mtx_map 为准而不是以 label_map 为准，
+			// 以 dim_map / multi_dim_map / mtx_map 为准而不是以 label_map 为准，
 			// 否则数据集里已经删掉的列、或全局字典里跟本数据集无关的字段都会混进表头。
-			LabelMap: mergeLabels(dims, mtxs, it.LabelMap, global),
+			LabelMap: mergeLabels(dims, multiDims, mtxs, it.LabelMap, global),
 		})
 	}
 	return out, nil
@@ -110,9 +112,10 @@ func (s *Service) VisibleDatasets(ctx context.Context, tenants []string) ([]Quer
 // DryRunRequest 自检请求：一段待验证的配置，不要求已保存。
 // 这样新建时也能先验证再落库，不必「保存了才发现 SQL 跑不通」。
 type DryRunRequest struct {
-	MidSQL string            `json:"mid_sql"`
-	DimMap map[string]string `json:"dim_map"`
-	MtxMap map[string]string `json:"mtx_map"`
+	MidSQL      string            `json:"mid_sql"`
+	DimMap      map[string]string `json:"dim_map"`
+	MultiDimMap map[string]string `json:"multi_dim_map"`
+	MtxMap      map[string]string `json:"mtx_map"`
 }
 
 // DryRunResult 自检结果。
@@ -154,10 +157,14 @@ func (s *Service) DryRun(ctx context.Context, req DryRunRequest) (*DryRunResult,
 	}
 
 	dimKeys := keysOf(req.DimMap)
+	multiKeys := keysOf(req.MultiDimMap)
 	mtxKeys := keysOf(req.MtxMap)
-	all := append(append([]string{}, dimKeys...), mtxKeys...)
+	// 多值维度既是维度（要参与 HasDim 判断）又需要收拢，
+	// 这里统一当成维度传进去渲染，JOIN 裁剪才不会把它依赖的表剪掉。
+	all := append(append([]string{}, dimKeys...), multiKeys...)
+	all = append(all, mtxKeys...)
 	rendered, err := RenderMidSQL(req.MidSQL, MidSQLData{
-		Dims:    dedupSorted(dimKeys),
+		Dims:    dedupSorted(append(append([]string{}, dimKeys...), multiKeys...)),
 		Metrics: dedupSorted(mtxKeys),
 		Fields:  dedupSorted(all),
 	})
@@ -182,7 +189,7 @@ func (s *Service) DryRun(ctx context.Context, req DryRunRequest) (*DryRunResult,
 	res.MidColumns = columnNames(raw.Columns)
 
 	// 第二枪：把每个维度 / 指标表达式都选一遍
-	aliasSQL, keys, err := BuildDryRunSQL(rendered, req.DimMap, req.MtxMap)
+	aliasSQL, keys, err := BuildDryRunSQL(rendered, req.DimMap, req.MultiDimMap, req.MtxMap)
 	if err != nil {
 		res.Stage = "expr"
 		res.Error = shortErr(err)
@@ -231,6 +238,7 @@ func shortErr(err error) string {
 }
 
 // mergeLabels 合并三层命名：数据集覆盖 → 全局定义 → 字段名兜底。
+// 多值维度与普通维度共用一套命名规则，它只是聚合方式不同，身份仍然是维度。
 //
 // 三态是这里的关键，覆盖层的「没有这个 key」和「显式空串」必须区分开：
 //   - 覆盖层没有 key            → 继承全局定义
@@ -239,8 +247,8 @@ func shortErr(err error) string {
 //     （典型场景：本数据集的同名字段与全局语义不同，又不想另起一个名字）
 //
 // 兜底由前端完成：map 里没有的字段，前端直接显示字段名本身，这里不写空值。
-func mergeLabels(dims, mtxs, override, global map[string]string) map[string]string {
-	out := make(map[string]string, len(dims)+len(mtxs))
+func mergeLabels(dims, multiDims, mtxs, override, global map[string]string) map[string]string {
+	out := make(map[string]string, len(dims)+len(multiDims)+len(mtxs))
 	put := func(k string) {
 		if v, ok := override[k]; ok {
 			// 命中覆盖层：空串也是有意义的显式声明，直接跳过不写
@@ -254,6 +262,9 @@ func mergeLabels(dims, mtxs, override, global map[string]string) map[string]stri
 		}
 	}
 	for k := range dims {
+		put(k)
+	}
+	for k := range multiDims {
 		put(k)
 	}
 	for k := range mtxs {
@@ -351,6 +362,7 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 		DatasetKey:   ds.DatasetKey,
 		MidSQL:       midSQL,
 		DimMap:       ds.DimMap,
+		MultiDimMap:  ds.MultiDimMap,
 		MtxMap:       ds.MtxMap,
 		Dims:         req.Dims,
 		Metrics:      req.Metrics,

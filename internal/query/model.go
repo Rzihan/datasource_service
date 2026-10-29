@@ -87,6 +87,9 @@ type QueryDataset struct {
 	DatasetKey  string            `json:"dataset_key"`
 	DatasetName string            `json:"dataset_name"`
 	DimMap      map[string]string `json:"dim_map"`
+	// MultiDimMap 多值维度。前端要把它合并进维度下拉，
+	// 但展示上给它一个「多值」标记——用户需要知道这一列是收拢展示的。
+	MultiDimMap map[string]string `json:"multi_dim_map"`
 	MtxMap      map[string]string `json:"mtx_map"`
 	LabelMap    map[string]string `json:"label_map"`
 }

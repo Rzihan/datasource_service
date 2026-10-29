@@ -11,8 +11,9 @@ CREATE TABLE IF NOT EXISTS `tb_dataset_config` (
   `dataset_name` VARCHAR(128)  NOT NULL COMMENT '展示名',
   `mid_sql`         MEDIUMTEXT    NOT NULL COMMENT '中间层 SQL，纯文本存储，不做语法校验',
   `dim_map`         JSON          NOT NULL COMMENT '维度映射 map[string]string',
+  `multi_dim_map`   JSON          NOT NULL DEFAULT (JSON_OBJECT()) COMMENT '多值维度映射 map[string]string，value 产出数组，收拢展示且不进 GROUP BY',
   `mtx_map`         JSON          NOT NULL COMMENT '指标映射 map[string]string',
-  `label_map`       JSON          NOT NULL DEFAULT (JSON_OBJECT()) COMMENT '维度/指标的中文含义，key 对应 dim_map/mtx_map 的键，仅影响展示',
+  `label_map`       JSON          NOT NULL DEFAULT (JSON_OBJECT()) COMMENT '维度/指标的中文含义，key 对应 dim_map/multi_dim_map/mtx_map 的键，仅影响展示',
   `acl`             JSON          NOT NULL DEFAULT (JSON_OBJECT()) COMMENT '访问控制，如 {"tenants":["t1"]}；tenants 缺省或为 [] 表示不限制',
   `status`          TINYINT       NOT NULL DEFAULT 1 COMMENT '1 启用 0 停用',
   `version`         INT           NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
@@ -28,7 +29,14 @@ CREATE TABLE IF NOT EXISTS `tb_dataset_config` (
   KEY `idx_updated_at` (`updated_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据集配置表';
 
--- 说明：dim_map / mtx_map 用 JSON 而非 TEXT。
+-- 说明：dim_map / multi_dim_map / mtx_map 是三种不同的字段类型，别混用：
+--   dim_map       普通维度，进 GROUP BY
+--   multi_dim_map 多值维度（一人属于多个公司这类），收拢成一个值展示，不进 GROUP BY
+--   mtx_map       指标，聚合函数
+-- 多值维度当初只能塞进 mtx_map 顶着，语义是错的（它是维度，只是需要聚合），
+-- 所以拆成独立一列。
+
+-- 说明：dim_map / multi_dim_map / mtx_map 用 JSON 而非 TEXT。
 -- MySQL 的 JSON 类型会在写入时校验语法并转成二进制存储，
 -- 代价几乎为零，却能把非法 JSON 挡在数据库之外。
 -- 业务结构（map[string]string）由 Go 侧类型系统保证：非字符串值在反序列化时会被拒绝。

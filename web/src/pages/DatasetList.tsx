@@ -79,6 +79,15 @@ export default function DatasetList() {
       render: (v: Record<string, string>) => `${Object.keys(v ?? {}).length} 项`,
     },
     {
+      title: 'multi_dim_map',
+      dataIndex: 'multi_dim_map',
+      width: 110,
+      render: (v: Record<string, string>) => {
+        const n = Object.keys(v ?? {}).length;
+        return n > 0 ? <Tag color="purple">{n} 项</Tag> : <Typography.Text type="secondary">—</Typography.Text>;
+      },
+    },
+    {
       title: 'mtx_map',
       dataIndex: 'mtx_map',
       width: 90,
