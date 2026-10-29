@@ -65,3 +65,4 @@ INSERT INTO `tb_global_label` (`field_key`, `label`, `created_by`, `updated_by`)
   ('channel', '渠道',     'migrate', 'migrate'),
   ('date',    '日期',     'migrate', 'migrate'),
   ('uv',      '去重用户数', 'migrate', 'migrate');
+

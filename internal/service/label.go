@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -12,9 +13,19 @@ import (
 	"dataset_service/internal/repo"
 )
 
+// DatasetFieldLister 提供数据集配置的字段清单，供一致性检查使用。
+// 用接口而不是直接依赖 *repo.DatasetRepo：字典服务只需要「列出数据集」这一个能力，
+// 接口能明确表达这个边界，也让单测可以塞一个假的进去。
+type DatasetFieldLister interface {
+	ListAvailable(ctx context.Context, limit int) ([]*model.DatasetConfig, error)
+}
+
 // LabelService 承载全局字段名称定义的业务规则，同时充当进程内字典缓存。
 type LabelService struct {
 	repo *repo.LabelRepo
+	// datasets 可为 nil，此时一致性检查会返回空结果而不是报错——
+	// 检查是个锦上添花的功能，不该因为没有注入数据集仓库就让整个字典服务起不来。
+	datasets DatasetFieldLister
 
 	// 缓存：字典会被每个数据集、每次查询读到，不加缓存等于给每次列表请求多打一次全表。
 	// 用 TTL 而不是「写时失效」就够了：多实例部署时本进程的失效通知也送不到别的实例，
@@ -25,12 +36,12 @@ type LabelService struct {
 	ttl       time.Duration
 }
 
-// NewLabelService 构造服务。ttl <= 0 时使用默认 30 秒。
-func NewLabelService(r *repo.LabelRepo, ttl time.Duration) *LabelService {
+// NewLabelService 构造服务。ttl <= 0 时使用默认 30 秒；datasets 可为 nil。
+func NewLabelService(r *repo.LabelRepo, datasets DatasetFieldLister, ttl time.Duration) *LabelService {
 	if ttl <= 0 {
 		ttl = 30 * time.Second
 	}
-	return &LabelService{repo: r, ttl: ttl}
+	return &LabelService{repo: r, datasets: datasets, ttl: ttl}
 }
 
 // Create 新建全局定义。
@@ -197,6 +208,127 @@ func (s *LabelService) invalidate() {
 	s.mu.Lock()
 	s.expiresAt = time.Time{}
 	s.mu.Unlock()
+}
+
+// Check 扫描「全局字典 × 全部数据集」，把四类会让中文名不生效或不一致的情况列出来。
+//
+// 存在的理由：全局字典只有一个字段名做 key，跨数据集必然可能同名不同义。
+// 这类问题不会报错、只会静默显示错的名字，靠人工逐个数据集比对根本查不完，
+// 所以必须由机器扫出来，再由人决定哪些是真冲突、哪些是该同步而没同步。
+//
+// 四类问题：
+//  1. conflicts     数据集覆盖了全局，两者不一致（可能是真同名不同义，也可能是漏同步）
+//  2. case_mismatch 数据集字段名与字典大小写不一致，全局定义静默失效
+//  3. missing       数据集有这个字段，但哪儿都没给中文名，表头显示原始字段名
+//  4. orphans       字典里定义了却没有任何数据集引用（改名 / 删除后的残留）
+func (s *LabelService) Check(ctx context.Context) (*model.LabelCheckResult, error) {
+	globals, err := s.repo.ListEnabled(ctx, 0)
+	if err != nil {
+		return nil, fmt.Errorf("load global labels: %w", err)
+	}
+	global := make(map[string]string, len(globals))
+	for _, g := range globals {
+		if g.Label != "" {
+			global[g.FieldKey] = g.Label
+		}
+	}
+
+	if s.datasets == nil {
+		return &model.LabelCheckResult{GlobalCount: len(global)}, nil
+	}
+	items, err := s.datasets.ListAvailable(ctx, 0)
+	if err != nil {
+		return nil, fmt.Errorf("list datasets: %w", err)
+	}
+	return checkAgainst(ctx, items, global)
+}
+
+// checkAgainst 是纯函数：给定数据集列表与全局字典，算出四类问题。
+// 单独拆出来是为了能直接单测——扫描逻辑里「显式空串不算缺失」这类分支
+// 靠真实数据库构造用例太费劲，而它们恰恰是最容易改坏的地方。
+func checkAgainst(_ context.Context, items []*model.DatasetConfig, global map[string]string) (*model.LabelCheckResult, error) {
+	res := &model.LabelCheckResult{
+		Conflicts:    []model.LabelConflict{},
+		CaseMismatch: []model.LabelCaseMismatch{},
+		Missing:      []model.LabelMissing{},
+		Orphans:      []model.LabelOrphan{},
+		GlobalCount:  len(global),
+		DatasetCount: len(items),
+	}
+
+	conflictMap := make(map[string][]model.LabelOverride)
+	missingMap := make(map[string][]string)
+	referenced := make(map[string]struct{}, len(global))
+
+	for _, ds := range items {
+		fields := append(keysOf(ds.DimMap), keysOf(ds.MtxMap)...)
+		sort.Strings(fields)
+		for _, k := range fields {
+			referenced[k] = struct{}{}
+
+			override, hasOverride := ds.LabelMap[k]
+			globalLabel := global[k]
+
+			// 覆盖且与全局不一致：要么是同名不同义（保留），要么是漏同步（该改）
+			if hasOverride && override != "" && globalLabel != "" && globalLabel != override {
+				conflictMap[k] = append(conflictMap[k], model.LabelOverride{
+					DatasetKey: ds.DatasetKey, Label: override,
+				})
+				continue
+			}
+
+			// 字典里没有这个写法，但小写后有 —— 全局定义因为大小写不匹配而静默失效
+			if globalLabel == "" && !hasOverride {
+				if lower := strings.ToLower(k); lower != k {
+					if g, ok := global[lower]; ok {
+						res.CaseMismatch = append(res.CaseMismatch, model.LabelCaseMismatch{
+							DatasetKey: ds.DatasetKey, FieldKey: k,
+							GlobalKey: lower, GlobalLabel: g,
+						})
+						continue
+					}
+				}
+			}
+
+			// 既没全局也没覆盖 → 表头显示原始字段名。
+			// 显式空串是有意为之（不使用中文名），不算缺失。
+			if !hasOverride && globalLabel == "" {
+				missingMap[k] = append(missingMap[k], ds.DatasetKey)
+			}
+		}
+	}
+
+	for _, k := range sortedKeys(conflictMap) {
+		res.Conflicts = append(res.Conflicts, model.LabelConflict{
+			FieldKey: k, GlobalLabel: global[k], Overrides: conflictMap[k],
+		})
+	}
+	for _, k := range sortedKeys(missingMap) {
+		res.Missing = append(res.Missing, model.LabelMissing{FieldKey: k, Datasets: missingMap[k]})
+	}
+	for _, k := range sortedKeys(global) {
+		if _, ok := referenced[k]; !ok {
+			res.Orphans = append(res.Orphans, model.LabelOrphan{FieldKey: k, Label: global[k]})
+		}
+	}
+	return res, nil
+}
+
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func normalizeFieldKey(raw string) (string, error) {

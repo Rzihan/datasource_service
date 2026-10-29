@@ -157,3 +157,43 @@ export interface LabelUpdatePayload {
   status?: number;
   version: number;
 }
+
+// 一致性检查的四类问题。都不会报错，只会让中文名静默不生效或显示错，
+// 所以必须扫出来由人判断：哪些是真同名不同义，哪些是该同步而没同步。
+export interface LabelOverride {
+  dataset_key: string;
+  label: string;
+}
+
+export interface LabelConflict {
+  field_key: string;
+  global_label: string;
+  overrides: LabelOverride[];
+}
+
+// 数据集字段名与字典大小写不一致：`Cost` 永远匹配不上 `cost`，全局定义静默失效
+export interface LabelCaseMismatch {
+  dataset_key: string;
+  field_key: string;
+  global_key: string;
+  global_label: string;
+}
+
+export interface LabelMissing {
+  field_key: string;
+  datasets: string[];
+}
+
+export interface LabelOrphan {
+  field_key: string;
+  label: string;
+}
+
+export interface LabelCheckResult {
+  conflicts: LabelConflict[];
+  case_mismatch: LabelCaseMismatch[];
+  missing: LabelMissing[];
+  orphans: LabelOrphan[];
+  dataset_count: number;
+  global_count: number;
+}

@@ -60,9 +60,11 @@ func New(d Deps) *gin.Engine {
 		v1.GET("/labels/:key", d.LH.Get)
 		v1.PUT("/labels/:key", d.LH.Update)
 		v1.DELETE("/labels/:key", d.LH.Delete)
-		// 全量字典，供数据集编辑页显示「继承：XXX」。
-		// 刻意不挂在 /labels 下：/labels/:key 的通配段会与同级静态段冲突。
+		// 下面两个刻意不挂在 /labels 下：/labels/:key 的通配段会与同级静态段冲突。
+		// 全量字典，供数据集编辑页显示「继承：XXX」
 		v1.GET("/label-map", d.LH.Map)
+		// 一致性检查：冲突 / 大小写不生效 / 缺失 / 孤儿
+		v1.GET("/label-check", d.LH.Check)
 
 		// 查询页可选的数据集，已按登录态租户过滤
 		v1.GET("/query/datasets", d.QH.Datasets)

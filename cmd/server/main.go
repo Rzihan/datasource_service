@@ -61,7 +61,8 @@ func main() {
 		service.NewDatasetService(repo.NewDatasetRepo(db), cfg.MaxSQLBytes),
 	)
 	// 全局字段名称字典。它同时喂给两个地方：自己的 CRUD 接口，以及查询侧的命名合并。
-	labelSvc := service.NewLabelService(repo.NewLabelRepo(db), 0)
+	// 注入 DatasetRepo 是为了让一致性检查能读到数据集的 dim_map / mtx_map
+	labelSvc := service.NewLabelService(repo.NewLabelRepo(db), repo.NewDatasetRepo(db), 0)
 	labelHandler := handler.NewLabelHandler(labelSvc)
 	queryHandler := query.NewHandler(query.NewService(
 		repo.NewDatasetRepo(db), chEngine, labelSvc, cfg.Query,

@@ -3,6 +3,7 @@ import type {
   CreatePayload,
   DatasetConfig,
   GlobalLabel,
+  LabelCheckResult,
   LabelCreatePayload,
   LabelListResult,
   LabelUpdatePayload,
@@ -94,4 +95,9 @@ export function updateLabel(key: string, payload: LabelUpdatePayload): Promise<G
 
 export function deleteLabel(key: string): Promise<unknown> {
   return unwrap(http.delete(`/labels/${encodeURIComponent(key)}`));
+}
+
+// 一致性检查：冲突 / 大小写不生效 / 缺失 / 孤儿
+export function fetchLabelCheck(): Promise<LabelCheckResult> {
+  return unwrap(http.get('/label-check'));
 }

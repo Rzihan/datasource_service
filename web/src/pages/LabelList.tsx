@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Button, Input, Popconfirm, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import { App, Button, Input, Popconfirm, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { deleteLabel, fetchLabelList, fetchList } from '../api';
+import LabelCheckPanel from '../components/LabelCheckPanel';
 import LabelDrawer from '../components/LabelDrawer';
 import type { GlobalLabel } from '../types';
 
@@ -21,6 +22,7 @@ export default function LabelList() {
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<GlobalLabel | null>(null);
+  const [tab, setTab] = useState('list');
   // 字段名 → 引用它的数据集列表，用来在删除/改名时提示影响面
   const [refs, setRefs] = useState<Record<string, string[]>>({});
 
@@ -153,44 +155,60 @@ export default function LabelList() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }} wrap>
-        <Input.Search
-          allowClear
-          placeholder="按字段名或中文名搜索"
-          style={{ width: 280 }}
-          onSearch={(v) => {
-            setPage(1);
-            setKeyword(v.trim());
-          }}
-        />
-        <Button icon={<ReloadOutlined />} onClick={() => void load()}>
-          刷新
-        </Button>
-        <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
-          新建字段名称
-        </Button>
-        <Typography.Text type="secondary">
-          全局字典对所有数据集生效；单个数据集可在自己的 label_map 中覆盖（本页 {enabledCount} 条启用）
-        </Typography.Text>
-      </Space>
+      <Tabs
+        activeKey={tab}
+        onChange={setTab}
+        items={[
+          {
+            key: 'list',
+            label: '字段定义',
+            children: (
+              <>
+                <Space style={{ marginBottom: 16 }} wrap>
+                  <Input.Search
+                    allowClear
+                    placeholder="按字段名或中文名搜索"
+                    style={{ width: 280 }}
+                    onSearch={(v) => {
+                      setPage(1);
+                      setKeyword(v.trim());
+                    }}
+                  />
+                  <Button icon={<ReloadOutlined />} onClick={() => void load()}>
+                    刷新
+                  </Button>
+                  <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
+                    新建字段名称
+                  </Button>
+                  <Typography.Text type="secondary">
+                    全局字典对所有数据集生效；单个数据集可在自己的 label_map 中覆盖（本页{' '}
+                    {enabledCount} 条启用）
+                  </Typography.Text>
+                </Space>
 
-      <Table
-        rowKey="field_key"
-        loading={loading}
-        columns={columns}
-        dataSource={items}
-        scroll={{ x: 1000 }}
-        pagination={{
-          current: page,
-          pageSize: size,
-          total,
-          showSizeChanger: true,
-          showTotal: (t) => `共 ${t} 条`,
-          onChange: (p, s) => {
-            setPage(p);
-            setSize(s);
+                <Table
+                  rowKey="field_key"
+                  loading={loading}
+                  columns={columns}
+                  dataSource={items}
+                  scroll={{ x: 1000 }}
+                  pagination={{
+                    current: page,
+                    pageSize: size,
+                    total,
+                    showSizeChanger: true,
+                    showTotal: (t) => `共 ${t} 条`,
+                    onChange: (p, s) => {
+                      setPage(p);
+                      setSize(s);
+                    },
+                  }}
+                />
+              </>
+            ),
           },
-        }}
+          { key: 'check', label: '一致性检查', children: <LabelCheckPanel /> },
+        ]}
       />
 
       <LabelDrawer

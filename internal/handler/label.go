@@ -44,6 +44,16 @@ func (h *LabelHandler) List(c *gin.Context) {
 	OK(c, res)
 }
 
+// Check 一致性检查：列出冲突 / 大小写不生效 / 缺失 / 孤儿四类问题。
+func (h *LabelHandler) Check(c *gin.Context) {
+	res, err := h.svc.Check(c.Request.Context())
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	OK(c, res)
+}
+
 // Map 返回全量字典，供数据集编辑页显示「继承：XXX」提示。
 // 单独开一个接口而不是复用 List：列表分页最多 200 条，字典可能超过，
 // 而且这里只需要 key→value，不需要分页和审计字段。
