@@ -3,12 +3,19 @@ import type { FilterNode } from '../types';
 // 分组节点的 logic 必填，用这个判断节点类型最省事
 export const isGroup = (n: FilterNode): boolean => !!n.logic;
 
+// 需要一组值（values）而不是单个值的操作符。
+// 多值维度的 has_any / has_all 也属于这一类，别只写 in / not in。
+export const MULTI_VALUE_OPS = ['in', 'not in', 'has_any', 'has_all'];
+
 export const emptyRoot = (): FilterNode => ({ logic: 'and', children: [] });
 
 // 叶子是否填了值。没填值的条件既没意义，也会让后端报无意义的错。
+//
+// MULTI_VALUE_OPS 必须是唯一来源：这里漏登记一个操作符，那条条件就会被
+// pruneEmpty 静默丢掉——用户以为筛了，实际看到的是全量数据。
 export const leafFilled = (n: FilterNode): boolean => {
   const op = n.op ?? '=';
-  if (op === 'in' || op === 'not in') {
+  if (MULTI_VALUE_OPS.includes(op)) {
     return (n.values?.length ?? 0) > 0;
   }
   return (n.value ?? '').trim() !== '';

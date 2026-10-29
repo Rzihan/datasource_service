@@ -78,13 +78,13 @@ export default function DatasetList() {
     {
       title: 'dim_map',
       dataIndex: 'dim_map',
-      width: 90,
+      width: 108,
       render: (v: Record<string, string>) => `${Object.keys(v ?? {}).length} 项`,
     },
     {
       title: 'multi_dim_map',
       dataIndex: 'multi_dim_map',
-      width: 110,
+      width: 140,
       render: (v: Record<string, string>) => {
         const n = Object.keys(v ?? {}).length;
         return n > 0 ? <Tag color="purple">{n} 项</Tag> : <Typography.Text type="secondary">—</Typography.Text>;
@@ -93,7 +93,7 @@ export default function DatasetList() {
     {
       title: 'mtx_map',
       dataIndex: 'mtx_map',
-      width: 90,
+      width: 108,
       render: (v: Record<string, string>) => `${Object.keys(v ?? {}).length} 项`,
     },
     {

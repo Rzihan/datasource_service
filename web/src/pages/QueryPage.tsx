@@ -4,7 +4,7 @@ import QueryBuilder from '../components/QueryBuilder';
 import ResultView from '../components/ResultView';
 import { executeQuery, fetchDimValues, fetchQueryDatasets } from '../api';
 import type { FilterNode, OrderBy, QueryDataset, QueryResult } from '../types';
-import { emptyRoot, pruneEmpty } from '../utils/filterTree';
+import { emptyRoot, countLeaves, pruneEmpty } from '../utils/filterTree';
 import { subscribeTenants } from '../identity';
 
 export default function QueryPage() {
@@ -99,6 +99,13 @@ export default function QueryPage() {
     try {
       // 空值的条件不提交，避免后端报无意义的错
       const pruned = pruneEmpty(filterTree);
+      // 保险：pruneEmpty 会静默丢掉「没填值」的条件。如果以后新增了用 values
+      // 的操作符却忘了登记，用户会以为筛过了、实际拿到全量数据——那比报错危险。
+      // 这里对比前后叶子数，丢了就明说。
+      const dropped = countLeaves(filterTree) - countLeaves(pruned);
+      if (dropped > 0) {
+        message.warning(`有 ${dropped} 个过滤条件没填值，本次查询已忽略`);
+      }
       const res = await executeQuery({
         dataset_key: selectedKey,
         dims,
@@ -118,7 +125,7 @@ export default function QueryPage() {
 
   return (
     <Row gutter={16}>
-      <Col xs={24} md={8} lg={7}>
+      <Col xs={24} md={9} lg={8}>
         <Card size="small" title="查询构建器">
           {loadingList ? (
             <Spin />
@@ -146,7 +153,7 @@ export default function QueryPage() {
           )}
         </Card>
       </Col>
-      <Col xs={24} md={16} lg={17}>
+      <Col xs={24} md={15} lg={16}>
         <Card size="small" title="查询结果">
           {error && (
             <Alert

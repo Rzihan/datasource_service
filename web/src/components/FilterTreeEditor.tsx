@@ -9,12 +9,11 @@ import {
 } from 'antd';
 import { DeleteOutlined, PlusOutlined, PartitionOutlined } from '@ant-design/icons';
 import type { FilterNode } from '../types';
-import { isGroup } from '../utils/filterTree';
+import { isGroup, MULTI_VALUE_OPS } from '../utils/filterTree';
 
 const OPS = ['=', '!=', '>', '>=', '<', '<=', 'like', 'in', 'not in'];
 // 指标是聚合出来的数值，模糊匹配没有语义，后端也会直接拒绝
 const METRIC_OPS = ['=', '!=', '>', '>=', '<', '<=', 'in', 'not in'];
-const MULTI_VALUE_OPS = ['in', 'not in', 'has_any', 'has_all'];
 
 // 多值维度只有「包含」语义。数组列上 = / like / in 都没有直觉含义，
 // 所以单独一套操作符，标签也直接写成人话。
@@ -109,9 +108,11 @@ export default function FilterTreeEditor(props: Props) {
     const patch = (p: Partial<FilterNode>) => updateChild(index, { ...leaf, ...p });
 
     return (
-      <Space.Compact key={index} style={{ width: '100%' }}>
+      // 用 flex 而不是 Space.Compact：Compact 会统一接管子项宽度，
+      // 里面设的固定宽度会被它的样式盖掉，中文操作符照样被省略号吃掉。
+      <div key={index} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         <Select
-          style={{ width: '30%' }}
+          style={{ flex: '1 1 0', minWidth: 0 }}
           value={field}
           options={fieldOptions}
           onChange={(v) => {
@@ -127,7 +128,9 @@ export default function FilterTreeEditor(props: Props) {
           }}
         />
         <Select
-          style={{ width: '20%' }}
+          // 固定宽度而不是百分比：中文标签「包含任一」「包含全部」是四个字，
+          // 按百分比分到窄栏里会被省略号吃掉，用户看不出选的是哪个操作符。
+          style={{ width: 104, flex: 'none' }}
           value={op}
           options={ops.map((o) => ({ value: o, label: OP_LABEL[o] ?? o }))}
           onChange={(v) => {
@@ -138,7 +141,7 @@ export default function FilterTreeEditor(props: Props) {
         {multi ? (
           <Select
             mode={metric ? 'tags' : 'multiple'}
-            style={{ width: '38%' }}
+            style={{ flex: '1 1 0', minWidth: 0 }}
             placeholder={metric ? '输入数值后回车' : '选择值'}
             tokenSeparators={metric ? [','] : undefined}
             loading={!metric && dimValueLoading[field]}
@@ -149,7 +152,7 @@ export default function FilterTreeEditor(props: Props) {
         ) : values.length > 0 && !metric ? (
           <Select
             showSearch
-            style={{ width: '38%' }}
+            style={{ flex: '1 1 0', minWidth: 0 }}
             placeholder="选择或输入值"
             loading={dimValueLoading[field]}
             value={leaf.value || undefined}
@@ -158,14 +161,14 @@ export default function FilterTreeEditor(props: Props) {
           />
         ) : (
           <Input
-            style={{ width: '38%' }}
+            style={{ flex: '1 1 0', minWidth: 0 }}
             placeholder={metric ? '数值' : '值'}
             value={leaf.value ?? ''}
             onChange={(e) => patch({ value: e.target.value })}
           />
         )}
         <Button icon={<DeleteOutlined />} onClick={() => removeChild(index)} />
-      </Space.Compact>
+      </div>
     );
   };
 
