@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { App, Button, Input, Popconfirm, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import { App, Button, Collapse, Input, Popconfirm, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { deleteDataset, fetchList } from '../api';
 import EditDrawer from '../components/EditDrawer';
 import HistoryDrawer from '../components/HistoryDrawer';
+import MultiDimCheckPanel from '../components/MultiDimCheckPanel';
 import type { DatasetConfig } from '../types';
 
 export default function DatasetList() {
@@ -19,6 +20,8 @@ export default function DatasetList() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<DatasetConfig | null>(null);
   const [historyKey, setHistoryKey] = useState<string | null>(null);
+  // 误配扫描默认收起：它会对每个数据集跑一次 mid_sql，展开才做，别拖慢列表页
+  const [checkOpen, setCheckOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -211,6 +214,24 @@ export default function DatasetList() {
           新建配置
         </Button>
       </Space>
+
+      <Collapse
+        style={{ marginBottom: 16 }}
+        activeKey={checkOpen ? ['multi-dim'] : []}
+        onChange={(keys) => setCheckOpen((keys as string[]).includes('multi-dim'))}
+        items={[
+          {
+            key: 'multi-dim',
+            label: '多值维度误配检查（把塞在指标里的多值字段找出来）',
+            // 收起时不挂载：扫描要对每个数据集跑一次 mid_sql，没必要在进页面时就付这个代价
+            children: checkOpen ? (
+              <MultiDimCheckPanel onMigrated={() => void load()} />
+            ) : (
+              <span />
+            ),
+          },
+        ]}
+      />
 
       <Table
         rowKey="dataset_key"

@@ -164,7 +164,54 @@ const (
 	ActionUpdate   = "update"
 	ActionDelete   = "delete"
 	ActionRollback = "rollback"
+	// ActionMigrate 把字段从 dim_map / mtx_map 搬到 multi_dim_map。
+	// 单独一个动作而不是复用 update：迁移是「纠错」，跟随手改配置不是一回事，
+	// 翻历史时应该能一眼看出这条是因为多值维度改错了。
+	ActionMigrate = "migrate"
 )
+
+// MultiDimCandidate 一个「疑似多值维度、但被配成了指标或普通维度」的字段。
+type MultiDimCandidate struct {
+	DatasetKey string `json:"dataset_key"`
+	FieldKey   string `json:"field_key"`
+	// From 标记它现在待在哪：mtx_map（当指标顶着）或 dim_map（会按取值拆行）
+	From   string `json:"from"`
+	Expr   string `json:"expr"`
+	Reason string `json:"reason"`
+	// SuggestExpr 建议搬进 multi_dim_map 的表达式。
+	//
+	// 不能直接用 Expr：以前多值维度只能塞进 mtx_map，写法就是完整收拢式
+	// arrayStringConcat(arraySort(groupUniqArrayArray(companies)), ',')，
+	// 原样搬过去生成 SQL 时会再包一层收拢，变成
+	// groupUniqArrayArray(收拢后的字符串)，必然报错。所以要先剥壳。
+	SuggestExpr string `json:"suggest_expr"`
+	// Confident 表示能确认 SuggestExpr 真的产出数组（拿 mid_sql 的列类型验证过）。
+	// 为 false 时前端不给一键迁移按钮，只提示人工改——猜错了比不迁更糟。
+	Confident bool `json:"confident"`
+}
+
+// MultiDimMigrateItem 要搬的一个字段。Expr 由前端把扫描建议带回，
+// 服务端不做猜测：它拿不到 mid_sql 的列类型，判断不了剥壳剥得对不对。
+type MultiDimMigrateItem struct {
+	Field string `json:"field"`
+	Expr  string `json:"expr"`
+}
+
+// MultiDimCheckResult 多值维度误配扫描结果。
+type MultiDimCheckResult struct {
+	Candidates   []MultiDimCandidate `json:"candidates"`
+	DatasetCount int                 `json:"dataset_count"`
+	// Scanned 是真正拿到 mid_sql 列类型的数据集数。跑不通的会跳过——
+	// 扫描是个辅助功能，不该因为某个数据集的 SQL 有问题就整个失败。
+	Scanned int `json:"scanned"`
+}
+
+// MigrateMultiDimRequest 把若干字段搬进 multi_dim_map 的请求。
+// Version 用于乐观锁：扫描到操作之间别人可能改过配置。
+type MigrateMultiDimRequest struct {
+	Items   []MultiDimMigrateItem `json:"items"`
+	Version int                   `json:"version"`
+}
 
 // DatasetHistory 是数据集配置的一次变更快照，对应表 tb_dataset_config_history。
 //

@@ -10,6 +10,7 @@ import type {
   LabelListResult,
   LabelUpdatePayload,
   ListResult,
+  MultiDimCheckResult,
   QueryDataset,
   QueryRequest,
   QueryResult,
@@ -91,6 +92,20 @@ export function executeQuery(payload: QueryRequest): Promise<QueryResult> {
 
 export function fetchDimValues(key: string, field: string): Promise<{ field: string; values: string[] }> {
   return unwrap(http.get(`/datasets/${encodeURIComponent(key)}/dim-values`, { params: { field } }));
+}
+
+// 多值维度误配扫描：把「疑似多值维度却当指标/普通维度配着」的列出来
+export function fetchMultiDimCheck(): Promise<MultiDimCheckResult> {
+  return unwrap(http.get('/multi-dim-check'));
+}
+
+// 把字段搬进 multi_dim_map。带乐观锁：扫描到点迁移之间别人可能改过配置。
+// expr 由调用方把扫描建议带回——服务端拿不到 mid_sql 的列类型，不做猜测。
+export function migrateMultiDim(
+  key: string,
+  payload: { items: Array<{ field: string; expr: string }>; version: number },
+): Promise<DatasetConfig> {
+  return unwrap(http.post(`/datasets/${encodeURIComponent(key)}/migrate-multi-dim`, payload));
 }
 
 export function fetchLabelList(params: {

@@ -125,6 +125,21 @@ func (h *DatasetHandler) Rollback(c *gin.Context) {
 	OK(c, m)
 }
 
+// MigrateMultiDim 把字段搬进 multi_dim_map（乐观锁）。
+func (h *DatasetHandler) MigrateMultiDim(c *gin.Context) {
+	var req model.MigrateMultiDimRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		BadRequest(c, bindError(err))
+		return
+	}
+	m, err := h.svc.MigrateMultiDim(c.Request.Context(), c.Param("key"), &req, operator(c))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	OK(c, m)
+}
+
 // Validate 只校验不落库，供前端实时反馈。
 func (h *DatasetHandler) Validate(c *gin.Context) {
 	var req model.ValidateRequest

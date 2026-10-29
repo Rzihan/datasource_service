@@ -62,6 +62,16 @@ func (h *Handler) DryRun(c *gin.Context) {
 	handler.OK(c, res)
 }
 
+// CheckMultiDim 扫描「疑似多值维度但没配在 multi_dim_map 里」的字段，供人工确认后迁移。
+func (h *Handler) CheckMultiDim(c *gin.Context) {
+	res, err := h.svc.CheckMultiDim(c.Request.Context())
+	if err != nil {
+		handler.Fail(c, http.StatusInternalServerError, http.StatusInternalServerError, err.Error())
+		return
+	}
+	handler.OK(c, res)
+}
+
 // DimValues 返回维度候选值，用于前端下拉枚举。
 func (h *Handler) DimValues(c *gin.Context) {
 	field := c.Query("field")

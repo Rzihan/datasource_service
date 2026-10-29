@@ -58,6 +58,8 @@ func New(d Deps) *gin.Engine {
 		// 变更历史与回滚：配置写错了能一键退回
 		v1.GET("/datasets/:key/histories", d.DS.Histories)
 		v1.POST("/datasets/:key/rollback", d.DS.Rollback)
+		// 把误配成指标/普通维度的多值维度搬进 multi_dim_map（乐观锁）
+		v1.POST("/datasets/:key/migrate-multi-dim", d.DS.MigrateMultiDim)
 
 		// 全局字段名称定义（对所有数据集生效的「字段名 → 中文名」字典）
 		v1.GET("/labels", d.LH.List)
@@ -70,6 +72,9 @@ func New(d Deps) *gin.Engine {
 		v1.GET("/label-map", d.LH.Map)
 		// 一致性检查：冲突 / 大小写不生效 / 缺失 / 孤儿
 		v1.GET("/label-check", d.LH.Check)
+		// 多值维度误配扫描。刻意不挂在 /datasets 下：/datasets/:key 的通配段
+		// 会与同级静态段冲突。
+		v1.GET("/multi-dim-check", d.QH.CheckMultiDim)
 
 		// 查询页可选的数据集，已按登录态租户过滤
 		v1.GET("/query/datasets", d.QH.Datasets)

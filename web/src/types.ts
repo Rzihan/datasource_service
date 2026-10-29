@@ -224,6 +224,26 @@ export interface DryRunResult {
   elapsed_ms: number;
 }
 
+// 多值维度误配扫描：一个字段看着像多值维度（底层是数组列 / 表达式用了数组函数），
+// 却被配成了指标或普通维度。列出来供人确认，不自动改。
+export interface MultiDimCandidate {
+  dataset_key: string;
+  field_key: string;
+  from: 'mtx_map' | 'dim_map';
+  expr: string;
+  reason: string;
+  // 建议搬进 multi_dim_map 的表达式（已剥掉收拢外壳）
+  suggest_expr: string;
+  // 能确认 suggest_expr 真的产出数组才为 true；false 时只提示、不给一键迁移
+  confident: boolean;
+}
+
+export interface MultiDimCheckResult {
+  candidates: MultiDimCandidate[];
+  dataset_count: number;
+  scanned: number;
+}
+
 export interface LabelCheckResult {
   conflicts: LabelConflict[];
   case_mismatch: LabelCaseMismatch[];

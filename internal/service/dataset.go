@@ -310,6 +310,98 @@ func (s *DatasetService) Rollback(ctx context.Context, key string, req *model.Ro
 	return after, nil
 }
 
+// MigrateMultiDim 把若干字段从 dim_map / mtx_map 搬进 multi_dim_map。
+//
+// 存在的原因：多值维度以前没地方放，只能塞进 mtx_map 当指标。现在有了正地方，
+// 让人手抄一遍表达式既慢又容易抄错，所以给一条一键迁移的路径。
+//
+// 两点刻意的设计：
+//  1. 只搬字段、不动别的。迁移前后其余配置逐字不变，出问题能一眼定位到「搬了哪个字段」。
+//  2. 带乐观锁。从「扫描出结果」到「点迁移」之间别人可能已经改过配置，
+//     不带 version 就会把别人的改动盖掉。
+func (s *DatasetService) MigrateMultiDim(ctx context.Context, key string, req *model.MigrateMultiDimRequest, operator string) (*model.DatasetConfig, error) {
+	key, err := normalizeKey(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Items) == 0 {
+		return nil, fmt.Errorf("%w: items 不能为空", ErrInvalid)
+	}
+	cur, err := s.repo.GetByKey(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	dimMap := copyStringMap(cur.DimMap)
+	multiDimMap := copyStringMap(cur.MultiDimMap)
+	mtxMap := copyStringMap(cur.MtxMap)
+
+	// 行级权限的列必须留在 dim_map：搬走了 buildRowFilters 会取不到表达式，
+	// 权限条件静默失效（fail-open），这比报错危险得多。
+	rfCols := map[string]bool{}
+	if c := cur.ACL.RowFilter.Tenant.Column; c != "" {
+		rfCols[c] = true
+	}
+	if c := cur.ACL.RowFilter.User.Column; c != "" {
+		rfCols[c] = true
+	}
+
+	for _, it := range req.Items {
+		f := strings.TrimSpace(it.Field)
+		expr := strings.TrimSpace(it.Expr)
+		if f == "" {
+			return nil, fmt.Errorf("%w: items 里有空的 field", ErrInvalid)
+		}
+		if expr == "" {
+			return nil, fmt.Errorf("%w: 字段 %q 缺少迁移后的表达式", ErrInvalid, f)
+		}
+		if _, ok := multiDimMap[f]; ok {
+			return nil, fmt.Errorf("%w: 字段 %q 已经是多值维度了", ErrInvalid, f)
+		}
+		_, fromDim := dimMap[f]
+		_, fromMtx := mtxMap[f]
+		if !fromDim && !fromMtx {
+			return nil, fmt.Errorf("%w: 字段 %q 不在该数据集的 dim_map / mtx_map 中", ErrInvalid, f)
+		}
+		if rfCols[f] {
+			return nil, fmt.Errorf("%w: 字段 %q 被行级权限用作过滤列，搬走会让权限条件失效；请先改掉行级权限配置", ErrInvalid, f)
+		}
+		delete(dimMap, f)
+		delete(mtxMap, f)
+		multiDimMap[f] = expr
+	}
+
+	m := &model.DatasetConfig{
+		DatasetKey:  cur.DatasetKey,
+		DatasetName: cur.DatasetName,
+		MidSQL:      cur.MidSQL,
+		DimMap:      dimMap,
+		MultiDimMap: multiDimMap,
+		MtxMap:      mtxMap,
+		LabelMap:    cur.LabelMap,
+		ACL:         cur.ACL,
+		Status:      cur.Status,
+		UpdatedBy:   operator,
+	}
+	if err := s.repo.Update(ctx, m, req.Version); err != nil {
+		return nil, err
+	}
+	after, err := s.repo.GetByKey(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	s.saveHistory(ctx, after, model.ActionMigrate, operator)
+	return after, nil
+}
+
+func copyStringMap(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 // Validate 只做结构与长度校验，不落库。供前端在提交前实时调用。
 // 注意：按约定，mid_sql 不做语法或语义校验。
 func (s *DatasetService) Validate(ctx context.Context, req *model.ValidateRequest) error {

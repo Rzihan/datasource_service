@@ -397,6 +397,27 @@ arrayStringConcat(arraySort(groupUniqArrayArray(companies)), ',') AS `companies`
 下拉里出现的是「公司A / 公司B」，不是「公司A,公司B」这类组合串——组合串的种类是排列组合，
 拿它当选项等于让用户在几百个组合里挑。
 
+### 存量怎么办：误配扫描与一键迁移
+
+`multi_dim_map` 是后来才有的，而多值维度早就存在——它们一直被塞在 `mtx_map` 里当指标顶着。
+光给出正确的地方不够，还得把已经配错的找出来、并给一条不用手抄表达式的迁移路径。
+
+`GET /api/v1/multi-dim-check` 扫全部数据集，两条判据命中任意一条就列出来：
+
+1. `mid_sql` 输出的这一列本身就是数组类型（跑一次真实数仓拿列元信息，最准）
+2. 表达式里用了数组函数（`groupArray` / `arrayStringConcat` / `arrayJoin` …）
+
+关键是**迁移时会先把收拢外壳剥掉**。以前写在指标里的多是完整收拢式
+`arrayStringConcat(arraySort(groupUniqArrayArray(companies)), ',')`，
+原样搬进 `multi_dim_map` 会被再包一层收拢，变成对字符串做 `groupUniqArrayArray`，必然报错。
+所以扫描结果里带 `suggest_expr`（剥壳后）与 `confident`：
+只有能确认 `suggest_expr` 真的产出数组时才给一键迁移，否则提示人工改——
+猜错了比不迁更糟，配错之后要等下次查询才炸，排查成本高得多。
+
+迁移走 `POST /api/v1/datasets/:key/migrate-multi-dim`，带乐观锁（扫描到点迁移之间别人可能改过），
+只搬字段、其余配置逐字不变，并记一条 `migrate` 历史可回滚。
+被行级权限用作过滤列的字段会被拒绝搬走——搬走会让权限条件静默失效（fail-open）。
+
 ### mid_sql 模板：按查询裁剪 JOIN
 
 `mid_sql` 支持 **Go text/template**。典型用途：一次查询用不到某张维表的字段时，
