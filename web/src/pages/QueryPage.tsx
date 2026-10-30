@@ -29,11 +29,18 @@ import QueryBuilder from '../components/QueryBuilder';
 import ResultView from '../components/ResultView';
 import FavoritesDrawer from '../components/FavoritesDrawer';
 import DiagnosisPanel from '../components/DiagnosisPanel';
-import { executeQuery, fetchDatasetStats, fetchDimValues, fetchQueryDatasets } from '../api';
+import {
+  appendDatasetExample,
+  executeQuery,
+  fetchDatasetStats,
+  fetchDimValues,
+  fetchQueryDatasets,
+} from '../api';
 import type {
   CompareRequest,
   DatasetStats,
   FilterNode,
+  MetaExample,
   OrderBy,
   QueryDataset,
   QueryResult,
@@ -112,6 +119,12 @@ export default function QueryPage() {
   // 收藏：和历史分开存。历史是滚动的「刚才查过什么」，收藏是有名字的「每周都要看一次」。
   const [favorites, setFavorites] = useState<FavoriteEntry[]>(loadFavorites);
   const [favOpen, setFavOpen] = useState(false);
+  // 把当前这一屏存成数据集的预置分析（写进 meta.examples）
+  const [presetOpen, setPresetOpen] = useState(false);
+  const [presetTitle, setPresetTitle] = useState('');
+  const [presetNote, setPresetNote] = useState('');
+  const [presetDefault, setPresetDefault] = useState(false);
+  const [presetSaving, setPresetSaving] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [saveNote, setSaveNote] = useState('');
@@ -237,6 +250,12 @@ export default function QueryPage() {
         const fav = loadFavorites().find((f) => f.datasetKey === key && f.isDefault);
         if (fav) {
           applyFavorite(fav, items);
+          return;
+        }
+        // 用户没设默认 → 退回作者的默认视图
+        const q = ds.meta?.default_example;
+        if (q) {
+          applyIntent(ds, new URLSearchParams(q));
           return;
         }
       }
@@ -489,6 +508,52 @@ export default function QueryPage() {
   // 收藏存的是「一屏查询的完整输入」，不是一条 URL。
   // 存输入的原因：数据集字段可能改名，打开时按当前字段重新校验一遍，
   // 比存一条会 404 的链接稳；而且收藏列表里要能显示「按什么维度、什么指标」。
+  // 当前这一屏的查询串：就是 URL 里 ds 之后的那一段。
+  // 直接复用已经写进 URL 的状态，不再另造一份序列化——两套序列化迟早会不一致。
+  const currentQueryString = () => {
+    const sp = new URLSearchParams(window.location.search);
+    sp.delete('ds');
+    return sp.toString();
+  };
+
+  const openSavePreset = () => {
+    if (!selectedKey || dims.length === 0) return;
+    setPresetTitle(suggestedName().slice(0, 40));
+    setPresetNote('');
+    setPresetDefault(!selected?.meta?.default_example);
+    setPresetOpen(true);
+  };
+
+  const savePreset = async () => {
+    if (!selectedKey) return;
+    const title = presetTitle.trim();
+    if (!title) {
+      message.warning('给它起个名字');
+      return;
+    }
+    const ex: MetaExample = {
+      title,
+      note: presetNote.trim() || undefined,
+      query: currentQueryString(),
+    };
+    if (!ex.query) {
+      message.warning('当前这一屏还没有可保存的查询');
+      return;
+    }
+    setPresetSaving(true);
+    try {
+      await appendDatasetExample(selectedKey, ex, presetDefault);
+      // 数据集列表里的 meta 是缓存的，不重拉的话左侧列表不会变
+      await loadDatasets();
+      setPresetOpen(false);
+      message.success(presetDefault ? `已存入数据集说明书，并设为作者默认视图` : '已存入数据集说明书');
+    } catch (e) {
+      message.error((e as Error).message || '保存失败');
+    } finally {
+      setPresetSaving(false);
+    }
+  };
+
   const openPreset = (query: string) => {
     if (!selected) return;
     applyIntent(selected, new URLSearchParams(query));
@@ -588,8 +653,17 @@ export default function QueryPage() {
     loadFavorites().find((f) => f.datasetKey === key && f.isDefault);
 
   const openDatasetWithDefault = (key: string, items?: QueryDataset[]) => {
+    // ① 用户自己的默认收藏最优先
     const fav = defaultFavoriteFor(key);
-    if (fav) applyFavorite(fav, items);
+    if (fav) {
+      applyFavorite(fav, items);
+      return;
+    }
+    // ② 其次是作者的默认视图。两条都没有就什么都不做——
+    // 打开一个数据集不该莫名其妙跑出一个查询。
+    const ds = (items ?? datasets).find((d) => d.dataset_key === key);
+    const q = ds?.meta?.default_example;
+    if (ds && q) applyIntent(ds, new URLSearchParams(q));
   };
 
   const copyLink = async () => {
@@ -684,7 +758,22 @@ export default function QueryPage() {
         </Card>
       </Col>
       <Col xs={24} md={15} lg={16}>
-        <Card size="small" title="查询结果">
+        <Card
+          size="small"
+          title="查询结果"
+          extra={
+            <Tooltip title="把当前这一屏写进数据集的说明书，下一个用这个数据集的人直接就能看到">
+              <Button
+                size="small"
+                type="text"
+                disabled={!selectedKey || dims.length === 0}
+                onClick={openSavePreset}
+              >
+                存为预置分析
+              </Button>
+            </Tooltip>
+          }
+        >
           {error && (
             <div style={{ marginBottom: 12 }}>
               <DiagnosisPanel
@@ -840,6 +929,41 @@ export default function QueryPage() {
           message.success('收藏已清空');
         }}
       />
+
+      <Modal
+        title="存为这个数据集的预置分析"
+        open={presetOpen}
+        onOk={savePreset}
+        onCancel={() => setPresetOpen(false)}
+        okButtonProps={{ loading: presetSaving }}
+        okText="存进说明书"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Input
+            placeholder="标题，例如：各环节每日产出"
+            value={presetTitle}
+            maxLength={40}
+            onChange={(e) => setPresetTitle(e.target.value)}
+          />
+          <Input.TextArea
+            placeholder="说明：这张图用来看什么、看的时候要注意什么（可留空）"
+            value={presetNote}
+            rows={3}
+            maxLength={120}
+            onChange={(e) => setPresetNote(e.target.value)}
+          />
+          <Checkbox checked={presetDefault} onChange={(e) => setPresetDefault(e.target.checked)}>
+            设为作者默认视图（打开这个数据集时若用户自己没设默认，就跑这条）
+          </Checkbox>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            存的是「{dims.length ? `${dims.length} 个维度` : '无维度'} ·{' '}
+            {metrics.length ? `${metrics.length} 个指标` : '无指标'}
+            {compare ? ' · 带对比周期' : ''} · 上限 {limit}」这一整套条件，写进数据集的 meta。
+          </Typography.Text>
+        </Space>
+      </Modal>
 
       <Modal
         title="收藏当前查询"

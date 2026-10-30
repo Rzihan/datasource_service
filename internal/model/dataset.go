@@ -107,6 +107,10 @@ type DatasetMeta struct {
 	FieldNotes map[string]string `json:"field_notes,omitempty"`
 	// Examples 预置分析：数据集的作者把「这张表该怎么用」直接钉在看板上
 	Examples []MetaExample `json:"examples,omitempty"`
+	// DefaultExample 作者的默认视图：取值是某条 example 的 query。
+	// 作者不该靠「堆十条预置分析」表达意图——那只是把选择成本转嫁给用户。
+	// 指定一条默认，其余才是「可选项」。
+	DefaultExample string `json:"default_example,omitempty"`
 }
 
 // MetaExample 一条预置分析。

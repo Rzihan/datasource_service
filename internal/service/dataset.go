@@ -678,5 +678,16 @@ func normalizeMeta(m model.DatasetMeta) model.DatasetMeta {
 			Query: query,
 		})
 	}
+	// 默认视图必须在 examples 里真的存在：指向一条被删掉的 example
+	// 会让「打开数据集该看到什么」指向一个空答案，等于没配。
+	def := strings.TrimSpace(m.DefaultExample)
+	if def != "" {
+		for _, e := range out.Examples {
+			if e.Query == def {
+				out.DefaultExample = def
+				break
+			}
+		}
+	}
 	return out
 }

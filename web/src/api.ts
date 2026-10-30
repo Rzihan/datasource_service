@@ -2,6 +2,7 @@ import axios from 'axios';
 import type {
   CreatePayload,
   DatasetConfig,
+  DatasetMeta,
   DatasetStats,
   DryRunResult,
   GlobalLabel,
@@ -11,6 +12,7 @@ import type {
   LabelListResult,
   LabelUpdatePayload,
   ListResult,
+  MetaExample,
   MultiDimCheckResult,
   QueryDataset,
   QueryRequest,
@@ -99,6 +101,31 @@ export function fetchDimValues(key: string, field: string): Promise<{ field: str
 // 不抛错——查数不该因为「体检报告没做出来」就不能用。
 export function fetchDatasetStats(key: string): Promise<DatasetStats> {
   return unwrap(http.get(`/datasets/${encodeURIComponent(key)}/stats`));
+}
+
+// 把一条预置分析写进数据集的说明书。
+// 作者最自然的动作是「在看板里调好一张图 → 存成预置」，而不是去配置页手敲一段查询串，
+// 所以这个入口放在查询页；内部仍是读配置 → 追加 → 带 version 回写。
+export async function appendDatasetExample(
+  key: string,
+  example: MetaExample,
+  asDefault: boolean,
+): Promise<DatasetConfig> {
+  const cfg = await fetchOne(key);
+  const meta: DatasetMeta = { ...(cfg.meta ?? {}) };
+  const examples = [...(meta.examples ?? []).filter((e) => e.title !== example.title), example];
+  return updateDataset(key, {
+    dataset_name: cfg.dataset_name,
+    mid_sql: cfg.mid_sql,
+    dim_map: cfg.dim_map,
+    multi_dim_map: cfg.multi_dim_map ?? {},
+    mtx_map: cfg.mtx_map,
+    label_map: cfg.label_map ?? {},
+    acl: cfg.acl ?? {},
+    status: cfg.status,
+    meta: { ...meta, examples, default_example: asDefault ? example.query : meta.default_example },
+    version: cfg.version,
+  });
 }
 
 // 多值维度误配扫描：把「疑似多值维度却当指标/普通维度配着」的列出来

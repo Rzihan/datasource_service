@@ -251,6 +251,7 @@ export default function QueryBuilder(props: Props) {
             而这个问题数据集作者心里有答案，现在它是数据集的一部分。 */}
         <PresetAnalyses
           examples={selected?.meta?.examples ?? []}
+          defaultQuery={selected?.meta?.default_example}
           onOpen={onOpenPreset ?? (() => {})}
           compact={compact}
         />

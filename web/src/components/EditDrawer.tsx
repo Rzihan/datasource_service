@@ -3,6 +3,7 @@ import {
   App,
   Alert,
   Button,
+  Collapse,
   Drawer,
   Form,
   Input,
@@ -16,7 +17,15 @@ import { ThunderboltOutlined } from '@ant-design/icons';
 import SqlEditor from './SqlEditor';
 import StringMapEditor from './StringMapEditor';
 import { createDataset, dryRunDataset, fetchLabelMap, updateDataset } from '../api';
-import type { ACL, DatasetConfig, DryRunResult, RowFilter, RowRule, StringMap } from '../types';
+import type {
+  ACL,
+  DatasetConfig,
+  DatasetMeta,
+  DryRunResult,
+  RowFilter,
+  RowRule,
+  StringMap,
+} from '../types';
 
 // 自检失败发生在哪一步，直接翻译成人话
 const STAGE_LABEL: Record<string, string> = {
@@ -83,6 +92,14 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   const [globalLabels, setGlobalLabels] = useState<StringMap>({});
   const [dryResult, setDryResult] = useState<DryRunResult | null>(null);
   const [dryRunning, setDryRunning] = useState(false);
+  // 说明书（meta）：描述 / 负责人 / 更新频率 / 标签 / 字段口径 / 预置分析。
+  // 之前这些只能靠脚本或 API 写——数据集作者最常用的东西却最没有入口。
+  const [metaDesc, setMetaDesc] = useState('');
+  const [metaOwner, setMetaOwner] = useState('');
+  const [metaFreq, setMetaFreq] = useState('');
+  const [metaTags, setMetaTags] = useState<string[]>([]);
+  const [metaNotes, setMetaNotes] = useState<StringMap>({});
+  const [metaDefault, setMetaDefault] = useState('');
 
   // 自检用的是「当前表单里的内容」而不是已保存的配置，所以新建时也能先验证再保存
   const onDryRun = async () => {
@@ -138,6 +155,13 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setLabelMap(record.label_map ?? {});
       setAclText(JSON.stringify(record.acl ?? {}, null, 2));
       setEnabled(record.status === 1);
+      const meta = record.meta ?? {};
+      setMetaDesc(meta.description ?? '');
+      setMetaOwner(meta.owner ?? '');
+      setMetaFreq(meta.update_freq ?? '');
+      setMetaTags(meta.tags ?? []);
+      setMetaNotes(meta.field_notes ?? {});
+      setMetaDefault(meta.default_example ?? '');
     } else {
       setKey('');
       setName('');
@@ -148,6 +172,12 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setLabelMap({});
       setAclText('{}');
       setEnabled(true);
+      setMetaDesc('');
+      setMetaOwner('');
+      setMetaFreq('');
+      setMetaTags([]);
+      setMetaNotes({});
+      setMetaDefault('');
     }
   }, [open, record]);
 
@@ -214,6 +244,28 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
     return [...cols].map((v) => ({ value: v, label: v }));
   }, [dimMap, rowFilter]);
 
+  // 说明书是数据集的一部分，保存时一起提交。
+  // 空值不写进 JSON：后端 normalize 会剔掉，但前端也剔一遍，
+  // 免得存进去一堆空字符串让人以为「说明写过了」。
+  const buildMeta = (): DatasetMeta => {
+    const out: DatasetMeta = {};
+    if (metaDesc.trim()) out.description = metaDesc.trim();
+    if (metaOwner.trim()) out.owner = metaOwner.trim();
+    if (metaFreq.trim()) out.update_freq = metaFreq.trim();
+    if (metaTags.length > 0) out.tags = metaTags;
+    const notes: StringMap = {};
+    for (const [k, v] of Object.entries(metaNotes)) {
+      if (k.trim() && v.trim()) notes[k.trim()] = v.trim();
+    }
+    if (Object.keys(notes).length > 0) out.field_notes = notes;
+    if (record?.meta?.examples?.length) out.examples = record.meta.examples;
+    // 默认视图必须指向仍存在的 example，否则等于没配
+    if (metaDefault && out.examples?.some((ex) => ex.query === metaDefault)) {
+      out.default_example = metaDefault;
+    }
+    return out;
+  };
+
   const save = async () => {
     if (!key.trim()) {
       message.warning('请填写 dataset_key');
@@ -253,6 +305,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           acl: parsedACL,
           status: enabled ? 1 : 0,
           version: record.version,
+          meta: buildMeta(),
         });
         message.success('已保存');
       } else {
@@ -266,6 +319,7 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           label_map: labelMap,
           acl: parsedACL,
           status: enabled ? 1 : 0,
+          meta: buildMeta(),
         });
         message.success('已创建');
       }
@@ -595,6 +649,108 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
           />
         </Form.Item>
       </Form>
+
+      {/* 说明书：之前只能靠脚本或 API 写，数据集作者最常用的东西反而最没有入口。
+          放在最后并且默认收起——它不是「能不能查」的必要条件，但决定了「敢不敢用」。 */}
+      <Collapse
+        ghost
+        style={{ marginTop: 8 }}
+        items={[
+          {
+            key: 'meta',
+            label: (
+              <Space size={6}>
+                <span>说明书（meta）</span>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  描述 · 负责人 · 更新频率 · 字段口径 · 默认视图
+                </Typography.Text>
+              </Space>
+            ),
+            children: (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    描述：这个数据集适合回答什么问题（会显示在查询页数据集下拉下方）
+                  </Typography.Text>
+                  <Input.TextArea
+                    value={metaDesc}
+                    rows={2}
+                    maxLength={200}
+                    placeholder="例如：数采环节逐条明细，看日产能、有效率与判废原因"
+                    onChange={(e) => setMetaDesc(e.target.value)}
+                  />
+                </div>
+                <Space size={12} wrap style={{ width: '100%' }}>
+                  <div style={{ flex: '1 1 200px' }}>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      负责人（口径找谁问）
+                    </Typography.Text>
+                    <Input
+                      value={metaOwner}
+                      placeholder="例如 数采运营 · 王工"
+                      onChange={(e) => setMetaOwner(e.target.value)}
+                    />
+                  </div>
+                  <div style={{ flex: '1 1 200px' }}>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      更新频率（决定「数据可能滞后」告警的阈值）
+                    </Typography.Text>
+                    <Input
+                      value={metaFreq}
+                      placeholder="例如 每日 06:00（T+1）"
+                      onChange={(e) => setMetaFreq(e.target.value)}
+                    />
+                  </div>
+                </Space>
+                <div>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    标签
+                  </Typography.Text>
+                  <Select
+                    mode="tags"
+                    style={{ width: '100%' }}
+                    value={metaTags}
+                    onChange={setMetaTags}
+                    placeholder="回车新增，例如 数采 / 产能"
+                  />
+                </div>
+                <div>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    字段口径（key 必须是上面的维度或指标名；会显示在查询页的字段下拉里，
+                    也能被搜索命中）
+                  </Typography.Text>
+                  <div style={{ marginTop: 4 }}>
+                    <StringMapEditor
+                      value={metaNotes}
+                      onChange={setMetaNotes}
+                      placeholderKey="字段名"
+                      placeholderValue="例如 单条平均时长（秒）"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    默认视图（作者指定的那条预置分析；用户自己设了默认收藏时以用户为准）
+                  </Typography.Text>
+                  <Select
+                    style={{ width: '100%', marginTop: 4 }}
+                    allowClear
+                    placeholder={
+                      record?.meta?.examples?.length ? '不指定' : '还没有预置分析，可在查询页「存为预置分析」'
+                    }
+                    value={metaDefault || undefined}
+                    onChange={(v) => setMetaDefault(v ?? '')}
+                    options={(record?.meta?.examples ?? []).map((e) => ({
+                      value: e.query,
+                      label: e.title,
+                    }))}
+                  />
+                </div>
+              </div>
+            ),
+          },
+        ]}
+      />
     </Drawer>
   );
 }

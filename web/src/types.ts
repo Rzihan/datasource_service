@@ -46,6 +46,9 @@ export interface DatasetMeta {
   // key 是 dim_map / mtx_map 的键，值是口径说明（单位、公式、注意事项）
   field_notes?: Record<string, string>;
   examples?: MetaExample[];
+  // 作者的默认视图：某条 example 的 query。
+  // 作者不该靠「堆十条预置」表达意图——那只是把选择成本转嫁给用户。
+  default_example?: string;
 }
 
 // 查询页看到的数据集：刻意不含 mid_sql（用户不感知 SQL）与 acl。
@@ -217,6 +220,9 @@ export interface UpdatePayload {
   acl: ACL;
   status?: number;
   version: number;
+  // 不传 = 不动说明书（后端保留原值）。传了就整段替换：
+  // 「没说」和「说没有」必须是两件事，所以是指针语义而不是默认值 {}
+  meta?: DatasetMeta;
 }
 
 // 全局字段名称定义：一份「字段名 → 中文名」的字典，对所有数据集生效。
