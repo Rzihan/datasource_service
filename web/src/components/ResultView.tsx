@@ -15,12 +15,15 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { BulbOutlined, DownloadOutlined, FullscreenOutlined } from '@ant-design/icons';
+import { BulbOutlined, DownloadOutlined, FullscreenOutlined, FunctionOutlined } from '@ant-design/icons';
 import type { ChartPoint, ChartType } from './ChartView';
 import { buildShape, recommend } from '../utils/chartRecommend';
 import type { ChartKind } from '../utils/chartRecommend';
 import { toNumber } from '../utils/number';
 import { columnDigits, formatNumber, formatScaled, numericText, parseScaled, sumColumn } from '../utils/format';
+import type { ExprNode } from '../utils/expr';
+import { evalExpression, parseExpression } from '../utils/expr';
+import DerivedColumnModal from './DerivedColumnModal';
 import type { QueryResult, StringMap } from '../types';
 
 // 保持原有导出面：数值判定已挪到 utils/number，图表和推荐规则共用同一套。
@@ -33,6 +36,9 @@ const ChartView = lazy(() => import('./ChartView'));
 // 系列数硬顶：多指标 × 多分组值很容易组合出几十条线，
 // 画出来没人看得懂，所以按总量取前 N 条并明确提示被截断。
 const MAX_SERIES = 12;
+
+// 派生列多是比值（CPC、点击率），两位小数会被抹成 0.05，四位才看得出差别。
+const derivedFormat = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 });
 
 // 四个 tab：表格是默认，三个图各一种用途。不做更多类型——
 // 类型越多越要用户理解「条形图和柱状图有什么区别」，收益远小于成本。
@@ -103,6 +109,11 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
   // 堆叠至少能回答「总量和构成」，所以给一个显式开关而不是替用户猜。
   const [stacked, setStacked] = useState(false);
   // 派生列：跟着这一次结果走，换查询就清空（列名可能完全不同）
+  const [derived, setDerived] = useState<Array<{ name: string; expr: string; node: ExprNode }>>([]);
+  const [derivedOpen, setDerivedOpen] = useState(false);
+  useEffect(() => {
+    setDerived([]);
+  }, [result]);
   const chartBoxRef = useRef<HTMLDivElement>(null);
   const fullBoxRef = useRef<HTMLDivElement>(null);
 
@@ -178,10 +189,19 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
               ) : null}
             </Table.Summary.Cell>
           ))}
+          {derived.map((d, di) => (
+            <Table.Summary.Cell key={`d${di}`} index={columnMeta.length + di} align="right">
+              <Tooltip title={`「${d.name}」是比值，逐行相加没有含义，所以不合计`}>
+                <Typography.Text type="secondary" style={{ cursor: 'help' }}>
+                  —
+                </Typography.Text>
+              </Tooltip>
+            </Table.Summary.Cell>
+          ))}
         </Table.Summary.Row>
       </Table.Summary>
     );
-  }, [result, columnMeta]);
+  }, [result, columnMeta, derived]);
 
   const colNames = useMemo(() => (result?.columns ?? []).map((c) => c.name), [result]);
 
@@ -207,6 +227,49 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     return values.length > 0 && values.every((v) => rx.test(String(v)));
   }, [result, resolvedX, colNames]);
 
+  // 派生列的值：逐行 = 表达式在「本次结果的列」上求值。
+  // 只允许引用基础列，不允许多层派生互相引用——那种依赖图在表里看不出来。
+  const derivedData = useMemo(() => {
+    if (!result) return [] as Array<Array<number | null>>;
+    return derived.map((d) =>
+      result.rows.map((row) =>
+        evalExpression(d.node, (name) => {
+          const idx = colNames.indexOf(name);
+          return idx >= 0 ? toNumber(row[idx]) : null;
+        }),
+      ),
+    );
+  }, [result, derived, colNames]);
+
+  // 记录表头的排序状态：antd 自己排序只影响它渲染的那份副本，
+  // 导出得按同样的口径再排一遍，否则「看到的」和「导出的」是两个顺序。
+  const [sortInfo, setSortInfo] = useState<{ key: string; order: 'ascend' | 'descend' } | null>(null);
+
+
+  const derivedColumns = useMemo(
+    () =>
+      derived.map((d, di) => ({
+        title: (
+          <Tooltip title={`计算列：${d.expr}`}>
+            <span>{d.name}</span>
+          </Tooltip>
+        ),
+        dataIndex: `d${di}`,
+        key: `d${di}`,
+        align: 'right' as const,
+        ellipsis: true,
+        render: (v: number | null) =>
+          v === null ? (
+            <Typography.Text type="secondary">NULL</Typography.Text>
+          ) : (
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>{derivedFormat.format(v)}</span>
+          ),
+        sorter: (a: Record<string, unknown>, b: Record<string, unknown>) =>
+          ((a[`d${di}`] as number | null) ?? -Infinity) - ((b[`d${di}`] as number | null) ?? -Infinity),
+      })),
+    [derived],
+  );
+
   const dataSource = useMemo(() => {
     if (!result) return [];
     const xIdx = resolvedX ? colNames.indexOf(resolvedX) : -1;
@@ -222,8 +285,13 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     if (xIsTemporal && xIdx >= 0) {
       rows.sort((a, b) => String(a[`c${xIdx}`] ?? '').localeCompare(String(b[`c${xIdx}`] ?? '')));
     }
+    derivedData.forEach((col, di) => {
+      rows.forEach((row, i) => {
+        row[`d${di}`] = col[i];
+      });
+    });
     return rows;
-  }, [result, resolvedX, colNames, xIsTemporal]);
+  }, [result, resolvedX, colNames, xIsTemporal, derivedData]);
 
   // 智能推荐：只看「结果长什么样」，与后端无关，纯前端推导。
   // 它只影响 tab 上的「推荐」标记，不会自动切走用户当前所在的 tab。
@@ -325,6 +393,31 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  const previewDerived = useCallback(
+    (expr: string) => {
+      if (!result || colNames.length === 0) return { error: '还没有查询结果', preview: '' };
+      try {
+        const node = parseExpression(expr, new Set(colNames));
+        const row = result.rows[0];
+        if (!row) return { error: '', preview: '当前结果没有行，无法预览' };
+        const v = evalExpression(node, (name) => {
+          const idx = colNames.indexOf(name);
+          return idx >= 0 ? toNumber(row[idx]) : null;
+        });
+        return {
+          error: '',
+          preview:
+            v === null
+              ? '第一行结果为 NULL（缺值或除以 0），其它行可能有值'
+              : `第一行：${derivedFormat.format(v)}`,
+        };
+      } catch (e) {
+        return { error: (e as Error).message, preview: '' };
+      }
+    },
+    [result, colNames],
+  );
 
   const addDerived = (name: string, expr: string) => {
     try {
@@ -453,6 +546,12 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
         <Button size="small" icon={<DownloadOutlined />} onClick={downloadCSV}>
           下载 CSV
         </Button>
+        <Space size={8}>
+          <Tooltip title="用已有列做四则运算，生成 CPC 之类的比率指标">
+            <Button size="small" icon={<FunctionOutlined />} onClick={() => setDerivedOpen(true)}>
+              计算列
+            </Button>
+          </Tooltip>
       </Space>
 
       {recommendation && (
@@ -478,7 +577,7 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
             children: (
               <Table
                 size="small"
-                columns={columns}
+                columns={[...columns, ...derivedColumns]}
                 dataSource={dataSource}
                 scroll={{ x: 'max-content' }}
                 summary={() => summaryRow}
@@ -503,6 +602,31 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
             children: chartTab(t.key),
           })),
         ]}
+      />
+
+      {derived.length > 0 && (
+        <Space size={4} wrap style={{ marginTop: 8 }}>
+          {derived.map((d, di) => (
+            <Tag
+              key={`${d.name}-${di}`}
+              closable
+              onClose={(e) => {
+                e.preventDefault();
+                setDerived((prev) => prev.filter((_, i) => i !== di));
+              }}
+            >
+              {d.name} = {d.expr}
+            </Tag>
+          ))}
+        </Space>
+      )}
+
+      <DerivedColumnModal
+        open={derivedOpen}
+        onClose={() => setDerivedOpen(false)}
+        fields={columnMeta.map((m) => ({ name: m.name, label: labelMap[m.name] || m.name }))}
+        onPreview={previewDerived}
+        onAdd={addDerived}
       />
 
       <Modal
