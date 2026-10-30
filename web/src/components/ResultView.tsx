@@ -75,6 +75,9 @@ interface Props {
   metrics: string[];
   labelMap: StringMap;
   exportMeta: ExportMeta;
+  // 不能逐行相加的指标（比率 / 均值 / 去重类）。合计行对它们显示「—」，
+  // 否则有效率会加出 1622% 这种一眼错的数——比不显示更糟。
+  nonAdditive?: string[];
 }
 
 // 表头显示中文含义，原始字段名收进 Tooltip，方便对照 SQL 和下游对接
@@ -113,7 +116,7 @@ function csvCell(v: unknown): string {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export default function ResultView({ result, dims, metrics, labelMap, exportMeta }: Props) {
+export default function ResultView({ result, dims, metrics, labelMap, exportMeta, nonAdditive = [] }: Props) {
   const { message } = App.useApp();
   // 默认落在表格：查数首先是要看到数，图只是可选的呈现方式。
   const [tab, setTab] = useState<TabKey>('table');
@@ -179,10 +182,11 @@ export default function ResultView({ result, dims, metrics, labelMap, exportMeta
   const summaryRow = useMemo(() => {
     if (!result || result.rows.length < 2) return null;
     if (!columnMeta.some((m) => m.numeric)) return null;
+    const nonAdditiveSet = new Set(nonAdditive);
     const sumNote = [
       `对当前返回的 ${result.rows.length} 行求和`,
       result.truncated ? '（结果已截断，这只是部分合计）' : '',
-      '去重类指标（如 UV）逐行相加会重复计数，比值类指标相加无意义',
+      '比率 / 均值 / 去重类指标不参与合计，显示为 —',
     ].join('；');
     return (
       <Table.Summary fixed>
@@ -195,10 +199,16 @@ export default function ResultView({ result, dims, metrics, labelMap, exportMeta
                     合计
                   </Typography.Text>
                 </Tooltip>
-              ) : m.numeric ? (
+              ) : m.numeric && !nonAdditiveSet.has(m.name) ? (
                 <Typography.Text strong style={{ fontVariantNumeric: 'tabular-nums' }}>
                   {formatScaled(sumColumn(result.rows.map((r) => r[i]), m.digits), m.digits)}
                 </Typography.Text>
+              ) : nonAdditiveSet.has(m.name) ? (
+                <Tooltip title={`「${m.name}」不是可累加的指标（比率/均值/去重），逐行相加没有含义`}>
+                  <Typography.Text type="secondary" style={{ cursor: 'help' }}>
+                    —
+                  </Typography.Text>
+                </Tooltip>
               ) : null}
             </Table.Summary.Cell>
           ))}
@@ -214,7 +224,7 @@ export default function ResultView({ result, dims, metrics, labelMap, exportMeta
         </Table.Summary.Row>
       </Table.Summary>
     );
-  }, [result, columnMeta, derived]);
+  }, [result, columnMeta, derived, nonAdditive]);
 
   const colNames = useMemo(() => (result?.columns ?? []).map((c) => c.name), [result]);
 
@@ -538,7 +548,7 @@ export default function ResultView({ result, dims, metrics, labelMap, exportMeta
           <Button size="small" icon={<DownloadOutlined />} onClick={downloadPng}>
             PNG
           </Button>
-          {canStack && (
+          {type === 'column' && canStack && (
             <Segmented
               size="small"
               value={stackActive ? 'stack' : 'group'}
@@ -549,7 +559,7 @@ export default function ResultView({ result, dims, metrics, labelMap, exportMeta
               ]}
             />
           )}
-          {canStack && !stackActive && series.length >= 4 && (
+          {type === 'column' && canStack && !stackActive && series.length >= 4 && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               系列较多，堆叠更易看总量
             </Typography.Text>

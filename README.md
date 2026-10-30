@@ -657,6 +657,28 @@ curl -X POST localhost:8080/api/v1/datasets \
 驱动要点：`clickhouse-go` **不支持扫描到 `*interface{}`**，必须按 `ColumnTypes()[i].ScanType()`
 构造目标；`Nullable` 列要给**二级指针**，否则 NULL 会被读成零值，和空字符串分不开。
 
+## 演示数据集：具身智能机器人数据平台
+
+除了原来的 `demo` 库，仓库还带一套更完整的业务数据（`embodied` 库，约 145 万行），
+用来验证「看板能不能真的被拿来做分析」，而不只是能查出数：
+
+```bash
+python3 deploy/register_embodied_datasets.py --base http://localhost:8080
+```
+
+| 数据集 | 面向角色 | 说明 |
+| --- | --- | --- |
+| `robot_collection` | 数采员 | 48 万条采集 episode：有效率、工时、存储、判废原因 |
+| `robot_annotation` | 标注员 | 90 万个标注任务单元：类型、工时、返修、一次通过率、涉及技能（多值维度） |
+| `robot_qc` | 质检员 | 6 万次抽检：采集/标注两套缺陷字典、判定与返修工时 |
+| `robot_business` | 商务 | 客户分层 × 项目阶段的交付、收入、应收、回款、欠款 |
+| `robot_pipeline` | 跨环节 | 三张事实表 `UNION ALL` 成一张，看全链路产能卡在哪 |
+
+数据形态是造出来的，不是 `rand()` 撒的：周末产能回落、月初爬产、月末冲量、
+中间三天设备返厂导致产能与通过率同步下滑、晚班有效率低于早班、难场景更容易返修。
+生成逻辑、口径与「能看出什么」写在
+[`docs/embodied/数据集说明.md`](docs/embodied/数据集说明.md)，截图在同目录。
+
 ## 已知边界
 
 - `mid_sql` 不做任何校验，写错的 SQL 要等下游执行时才暴露。列表页会截断展示 SQL，方便肉眼扫一遍。

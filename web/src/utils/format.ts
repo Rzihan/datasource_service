@@ -69,3 +69,22 @@ export function sumColumn(values: unknown[], digits: number): bigint {
   for (const v of values) acc += parseScaled(v, digits) ?? 0n;
   return acc;
 }
+
+// ---- 指标能不能逐行相加 ----
+//
+// 合计行给每个数值列一个数，但三类指标相加纯属噪声：
+//   · 去重类 uniq / uniqExact —— 相加等于把同一批人算了好几遍
+//   · 均值类 avg —— 各分组均值的和没有任何含义
+//   · 比率类 分子 / 分母 —— 相加得到「百分比之和」，比如有效率能加到 1622%
+// 反过来，`sum(x) / 3600` 只是换算单位，除数是个常数，仍然可加。
+const NON_ADDITIVE_FN =
+  /\b(avg|avgWeighted|uniq|uniqExact|uniqCombined|median|medianExact|quantile\w*|stddev\w*|var\w*|corr|entropy)\s*\(/i;
+
+export function isAdditiveMetric(expr: string | undefined): boolean {
+  const e = (expr ?? '').trim();
+  if (!e) return true;
+  if (NON_ADDITIVE_FN.test(e)) return false;
+  // 除以字母/括号开头的东西 = 除以另一个列或聚合，是比率；除以数字只是单位换算
+  if (/\/\s*[A-Za-z_(]/.test(e)) return false;
+  return true;
+}

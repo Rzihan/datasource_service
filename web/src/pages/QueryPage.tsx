@@ -7,6 +7,7 @@ import ResultView from '../components/ResultView';
 import { executeQuery, fetchDimValues, fetchQueryDatasets } from '../api';
 import type { FilterNode, OrderBy, QueryDataset, QueryResult } from '../types';
 import { emptyRoot, countLeaves, describeFilter, pruneEmpty } from '../utils/filterTree';
+import { isAdditiveMetric } from '../utils/format';
 import type { HistoryEntry } from '../utils/queryHistory';
 import { clearHistory, historyTime, loadHistory, pushHistory } from '../utils/queryHistory';
 import { subscribeTenants } from '../identity';
@@ -348,6 +349,7 @@ export default function QueryPage() {
             result={result}
             dims={dims}
             metrics={metrics}
+            nonAdditive={metrics.filter((m) => !isAdditiveMetric(selected?.mtx_map?.[m]))}
             labelMap={selected?.label_map ?? {}}
             exportMeta={{
               dataset: selected ? `${selected.dataset_key} · ${selected.dataset_name}` : selectedKey,
