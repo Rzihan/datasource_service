@@ -123,3 +123,36 @@ export function withRange(
   return { ...base, children: [...(base.children ?? []), ...leaves] };
 }
 
+// 把条件树说成人话：历史记录、导出文件的口径说明都用它。
+// 不用 JSON —— 没人愿意读 {"logic":"and","children":[...]}。
+const OP_TEXT: Record<string, string> = {
+  '=': '=',
+  '!=': '≠',
+  '>': '>',
+  '>=': '≥',
+  '<': '<',
+  '<=': '≤',
+  like: '包含',
+  in: '属于',
+  'not in': '不属于',
+  has: '包含',
+  has_not: '不包含',
+  has_any: '包含任一',
+  has_all: '包含全部',
+};
+
+export function describeFilter(n: FilterNode | null, labelOf: (f: string) => string): string {
+  if (!n) return '';
+  if (!isGroup(n)) {
+    const field = labelOf(n.field ?? '');
+    const op = n.op ?? '=';
+    if (op === 'is_null') return `${field} 为空`;
+    if (op === 'is_not_null') return `${field} 不为空`;
+    const value = MULTI_VALUE_OPS.includes(op) ? (n.values ?? []).join('、') : (n.value ?? '');
+    if (!value) return '';
+    return `${field} ${OP_TEXT[op] ?? op} ${value}`;
+  }
+  const parts = (n.children ?? []).map((c) => describeFilter(c, labelOf)).filter(Boolean);
+  const body = parts.join(n.logic === 'or' ? ' 或 ' : ' 且 ');
+  return parts.length > 1 ? `(${body})` : body;
+}

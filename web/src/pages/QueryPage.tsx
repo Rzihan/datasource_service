@@ -41,6 +41,9 @@ export default function QueryPage() {
   const [error, setError] = useState<string>('');
   const [dimValues, setDimValues] = useState<Record<string, string[]>>({});
   const [dimValueLoading, setDimValueLoading] = useState<Record<string, boolean>>({});
+  const [history, setHistory] = useState<HistoryEntry[]>(loadHistory);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
   // URL 只在「首次加载完数据集」时读一次：之后 URL 由下面那个同步 effect 单向写，
   // 免得读改写互相触发，把用户的输入抖掉。
   const restoredRef = useRef(false);
@@ -68,6 +71,19 @@ export default function QueryPage() {
           limit: intent.limit,
         });
         setResult(res);
+        // 历史是「查过什么」的记录，只在成功后写：失败的那次没有参考价值
+        setHistory(
+          pushHistory({
+            datasetKey: intent.key,
+            dims: intent.dims,
+            metrics: intent.metrics,
+            filterTree: pruned ?? emptyRoot(),
+            orderBy: intent.orderBy,
+            limit: intent.limit,
+            rows: res.row_count,
+            elapsedMs: res.elapsed_ms,
+          }),
+        );
       } catch (e) {
         setResult(null);
         setError((e as Error).message || '查询失败');
@@ -223,6 +239,35 @@ export default function QueryPage() {
     void execute({ key: selectedKey, dims, metrics, filterTree, orderBy, limit });
   };
 
+  // 历史回填：一次性替换全部条件再查，而不是让用户自己回忆当时筛了什么
+  const restoreHistory = (entry: HistoryEntry) => {
+    const ds = datasets.find((d) => d.dataset_key === entry.datasetKey);
+    if (!ds) {
+      message.warning('该数据集已不可见或已删除，无法回填');
+      return;
+    }
+    setSelectedKey(entry.datasetKey);
+    setDims(entry.dims);
+    setMetrics(entry.metrics);
+    setFilterTree(entry.filterTree);
+    setOrderBy(entry.orderBy ?? null);
+    setLimit(entry.limit);
+    setHistoryOpen(false);
+    void execute({
+      key: entry.datasetKey,
+      dims: entry.dims,
+      metrics: entry.metrics,
+      filterTree: entry.filterTree,
+      orderBy: entry.orderBy ?? null,
+      limit: entry.limit,
+    });
+  };
+
+  const labelOf = (datasetKey: string) => (field: string) => {
+    const ds = datasets.find((d) => d.dataset_key === datasetKey);
+    return ds?.label_map?.[field] || field;
+  };
+
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(window.location.href);
@@ -238,6 +283,18 @@ export default function QueryPage() {
         <Card
           size="small"
           title="查询构建器"
+          extra={
+            <Space size={0}>
+              <Tooltip title="最近的查询，可一键回填">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<HistoryOutlined />}
+                  onClick={() => setHistoryOpen(true)}
+                >
+                  历史
+                </Button>
+              </Tooltip>
               <Button
                 size="small"
                 type="text"
@@ -290,6 +347,55 @@ export default function QueryPage() {
           <ResultView result={result} dims={dims} metrics={metrics} labelMap={selected?.label_map ?? {}} />
         </Card>
       </Col>
+      <Drawer
+        title="查询历史"
+        width={460}
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        extra={
+          history.length > 0 && (
+            <Button size="small" icon={<DeleteOutlined />} onClick={() => setHistory(clearHistory())}>
+              清空
+            </Button>
+          )
+        }
+      >
+        {history.length === 0 ? (
+          <Empty description="还没有查询记录" />
+        ) : (
+          <List
+            size="small"
+            dataSource={history}
+            renderItem={(e) => {
+              const ds = datasets.find((d) => d.dataset_key === e.datasetKey);
+              const dimsText = e.dims.length > 0 ? e.dims.map((d) => labelOf(e.datasetKey)(d)).join('、') : '无维度';
+              const mtxText = e.metrics.length > 0 ? e.metrics.map((m) => labelOf(e.datasetKey)(m)).join('、') : '无指标';
+              const filterText = describeFilter(e.filterTree, labelOf(e.datasetKey));
+              return (
+                <List.Item
+                  actions={[
+                    <Button key="fill" size="small" type="link" onClick={() => restoreHistory(e)}>
+                      回填
+                    </Button>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={`${ds?.dataset_name ?? e.datasetKey} · ${dimsText} × ${mtxText}`}
+                    description={
+                      <div style={{ fontSize: 12 }}>
+                        {filterText && <div>筛选：{filterText}</div>}
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {historyTime(e.ts)} · {e.rows} 行 · {e.elapsedMs} ms
+                        </Typography.Text>
+                      </div>
+                    }
+                  />
+                </List.Item>
+              );
+            }}
+          />
+        )}
+      </Drawer>
     </Row>
   );
 }
