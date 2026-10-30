@@ -149,6 +149,21 @@ func Build(spec Spec) (string, []Param, error) {
 		limit = 1000
 	}
 
+	// 没有显式排序时也要给出一个确定的顺序，两个理由：
+	//  1. LIMIT 的正确性——把「返回行数」改成 10 想看 Top10，没有 ORDER BY 时
+	//     拿到的是引擎恰好先产出的 10 行，跟「最大」没有任何关系；
+	//  2. 可复现——同一查询两次执行顺序可能不同，柱子/折线的顺序就在乱跳。
+	// 口径：有指标按第一个指标降序（TopN 的直觉），没有指标按维度升序；
+	// 末尾把全部维度升序挂上做 tie-break，同值时顺序也稳定。
+	if len(orderParts) == 0 {
+		if len(spec.Metrics) > 0 {
+			orderParts = append(orderParts, fmt.Sprintf("%s DESC", quote(spec.Metrics[0])))
+		}
+		for _, dim := range spec.Dims {
+			orderParts = append(orderParts, fmt.Sprintf("%s ASC", quote(dim)))
+		}
+	}
+
 	var sb strings.Builder
 	sb.WriteString("SELECT\n  ")
 	sb.WriteString(strings.Join(selectParts, ",\n  "))

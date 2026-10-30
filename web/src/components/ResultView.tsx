@@ -119,17 +119,6 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
       ellipsis: true,
       render: (v: unknown) => renderCell(v),
     }));
-
-  const dataSource = useMemo(() => {
-    if (!result) return [];
-    return result.rows.map((row, i) => {
-      const obj: Record<string, unknown> = { key: i };
-      row.forEach((v, idx) => {
-        obj[`c${idx}`] = v;
-      });
-      return obj;
-    });
-  }, [result]);
   }, [columnMeta, labelMap, compareAt]);
 
   // 合计行：只对当前返回的全部行求和（不是当前分页），有分组才显示。
@@ -177,6 +166,36 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
   const resolvedGroup = dimCols.find((d) => d !== resolvedX) ?? '';
   const resolvedYs = metricCols;
 
+  // X 轴是不是时间：后端默认按指标降序返回（TopN 口径），直接拿去画折线，
+  // 趋势会被排序口径打乱——看着像「忽高忽低」，其实是降序排列。
+  // 这里只做格式识别，不做类型推断：认得 ISO 日期 / 日期时间就够了。
+  const xIsTemporal = useMemo(() => {
+    if (!result || !resolvedX) return false;
+    const idx = colNames.indexOf(resolvedX);
+    if (idx < 0) return false;
+    const rx = /^\d{4}-\d{2}(-\d{2})?([ T]\d{2}:\d{2}(:\d{2})?)?$/;
+    const values = result.rows.map((r) => r[idx]).filter((v) => v !== null && v !== undefined);
+    return values.length > 0 && values.every((v) => rx.test(String(v)));
+  }, [result, resolvedX, colNames]);
+
+  const dataSource = useMemo(() => {
+    if (!result) return [];
+    const xIdx = resolvedX ? colNames.indexOf(resolvedX) : -1;
+    const rows = result.rows.map((row, i) => {
+      const obj: Record<string, unknown> = { key: i };
+      row.forEach((v, idx) => {
+        obj[`c${idx}`] = v;
+      });
+      return obj;
+    });
+    // 时间维度按时间升序展示：表格和图必须讲同一个顺序，
+    // 否则「表里第一行」和「图里最左边」是两个不同的日期。
+    if (xIsTemporal && xIdx >= 0) {
+      rows.sort((a, b) => String(a[`c${xIdx}`] ?? '').localeCompare(String(b[`c${xIdx}`] ?? '')));
+    }
+    return rows;
+  }, [result, resolvedX, colNames, xIsTemporal]);
+
   // 智能推荐：只看「结果长什么样」，与后端无关，纯前端推导。
   // 它只影响 tab 上的「推荐」标记，不会自动切走用户当前所在的 tab。
   const shape = useMemo(
@@ -221,8 +240,11 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     }
     const keep = new Set(names);
     const kept = all.filter((p) => keep.has(p.series));
+    // 时间类 X 轴按时间升序；其余保持后端顺序（默认即按指标降序），
+    // 柱子从高到低排，才看得出「谁是大头」。
+    if (xIsTemporal) kept.sort((a, b) => a.x.localeCompare(b.x));
     return { points: kept, series: names, seriesTruncated: truncated, xCount: new Set(kept.map((p) => p.x)).size };
-  }, [result, colNames, resolvedX, resolvedYs, resolvedGroup, labelMap]);
+  }, [result, colNames, resolvedX, resolvedYs, resolvedGroup, labelMap, xIsTemporal]);
 
   // 某些图在当前字段组合下画不出来：直接把对应 tab 置灰并说明原因，
   // 而不是让用户点进去看到一张莫名其妙的图。

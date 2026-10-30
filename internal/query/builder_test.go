@@ -752,3 +752,53 @@ func TestBuildDimValuesSQL(t *testing.T) {
 		t.Fatalf("no row filter should produce no params, got %+v", params)
 	}
 }
+// 没给排序时也必须给出确定顺序：否则 LIMIT 10 拿到的是引擎先产出的 10 行，
+// 不是 Top10；同一查询两次执行顺序还可能不同。
+func TestBuildDefaultOrderWhenNoOrderBy(t *testing.T) {
+	spec := baseSpec()
+	spec.Limit = 10
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "ORDER BY `cost` DESC, `date` ASC"; !strings.Contains(sql, want) {
+		t.Errorf("sql missing default order %q\n--- sql ---\n%s", want, sql)
+	}
+	if !strings.Contains(sql, "LIMIT 10") {
+		t.Errorf("sql missing limit\n--- sql ---\n%s", sql)
+	}
+}
+
+// 只有维度没有指标时，按维度升序（没有可排序的数值）
+func TestBuildDefaultOrderDimsOnly(t *testing.T) {
+	spec := baseSpec()
+	spec.Metrics = nil
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "ORDER BY `date` ASC"; !strings.Contains(sql, want) {
+		t.Errorf("sql missing default order %q\n--- sql ---\n%s", want, sql)
+	}
+}
+
+// 显式排序优先，不能和默认排序混在一起
+func TestBuildExplicitOrderWins(t *testing.T) {
+	spec := baseSpec()
+	spec.OrderBy = []OrderBy{{Field: "date", Desc: false}}
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Count(sql, "ORDER BY") != 1 {
+		t.Errorf("expect exactly one ORDER BY\n--- sql ---\n%s", sql)
+	}
+	if want := "ORDER BY `date` ASC"; !strings.Contains(sql, want) {
+		t.Errorf("sql missing explicit order %q\n--- sql ---\n%s", want, sql)
+	}
+	if strings.Contains(sql, "`cost` DESC") {
+		t.Errorf("default order leaked into explicit order\n--- sql ---\n%s", sql)
+	}
+}
+
+// 空值筛选：可空维度的 NULL 是一类真实数据，必须能单独筛出来 / 排除掉。
