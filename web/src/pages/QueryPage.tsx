@@ -97,6 +97,10 @@ interface Props {
     key: string;
     // 说明这个数据集是哪来的，免得用户以为是被谁筛过
     hint?: string;
+    // 入口自己的默认视图（URL 里 ds 之后的那一段）。
+    // 优先于数据集的 default_example：同一个数据集挂在两个旧页面下时，
+    // 各自想让用户第一眼看到的东西是不一样的。
+    query?: string;
   };
 }
 
@@ -246,6 +250,39 @@ export default function QueryPage({ locked }: Props = {}) {
     }
   };
 
+  // 入口页打开时该跑什么。
+  //
+  // 顺序是刻意排的：
+  //   ① URL 里写明了要看什么 → 以链接为准（分享出去的链接必须能还原）
+  //   ② 用户自己的默认收藏
+  //   ③ 入口自己的默认视图（作者为这个入口钉的那张图）
+  //   ④ 数据集的默认视图
+  //
+  // 用户优先于作者：入口是作者给的，但「我每次想先看什么」是用户的事。
+  // 入口默认视图又优先于数据集默认视图，因为同一个数据集挂在不同旧页面下时，
+  // 用户带着的预期是不一样的——从「采集日报」进来的人不该先看到「质检通过率」。
+  const openLocked = (items: QueryDataset[]) => {
+    if (!locked) return;
+    const ds = items.find((d) => d.dataset_key === locked.key);
+    if (!ds) return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get('dims') || sp.get('metrics')) {
+      applyIntent(ds, sp);
+      return;
+    }
+    const fav = loadFavorites().find((f) => f.datasetKey === locked.key && f.isDefault);
+    if (fav) {
+      applyFavorite(fav, items);
+      return;
+    }
+    if (locked.query) {
+      applyIntent(ds, new URLSearchParams(locked.query));
+      return;
+    }
+    const q = ds.meta?.default_example;
+    if (q) applyIntent(ds, new URLSearchParams(q));
+  };
+
   // 从 URL 恢复：链接是「可交付物」，同事点开应该看到同一张图，
   // 而不是一个空白的查询构建器。
   const applyUrlState = useCallback(
@@ -290,7 +327,7 @@ export default function QueryPage({ locked }: Props = {}) {
         // 入口页不从 URL 恢复数据集：数据集由入口配置决定，URL 里那一段
         // 只描述「这一屏查了什么」，分享出去仍然能还原。
         if (locked) {
-          if (items.some((d) => d.dataset_key === locked.key)) setSelectedKey(locked.key);
+          openLocked(items);
         } else {
           applyUrlState(items);
         }

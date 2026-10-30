@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Breadcrumb, Card, Empty, Space, Spin, Tag, Typography } from 'antd';
+import { Breadcrumb, Button, Card, Empty, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { ArrowLeftOutlined, AppstoreOutlined } from '@ant-design/icons';
 import QueryPage from './QueryPage';
 import type { QueryDataset } from '../types';
 import { collectEntries, findEntry, statusText } from '../utils/entries';
@@ -61,18 +62,47 @@ export default function EntryPage({ datasets }: Props) {
             { title: entry.title },
           ]}
         />
-        <Space size={8} align="center" style={{ marginTop: 6, flexWrap: 'wrap' }}>
-          <Typography.Title level={5} style={{ margin: 0 }}>
-            {entry.title}
-          </Typography.Title>
-          <Tag color="blue">可视化查询</Tag>
-          <Tag>{statusText(entry.status)}</Tag>
-          {entry.legacyPage && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              原页面：{entry.legacyPage.title}
-            </Typography.Text>
-          )}
-        </Space>
+        <div
+          style={{
+            marginTop: 6,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <Space size={8} align="center" style={{ flexWrap: 'wrap' }}>
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              {entry.title}
+            </Typography.Title>
+            <Tag color="blue">可视化查询</Tag>
+            <Tag>{statusText(entry.status)}</Tag>
+            {entry.legacyPage && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                原页面：{entry.legacyPage.title}
+              </Typography.Text>
+            )}
+          </Space>
+          {/* 出口比入口更重要：迁移最怕的是「进来了出不去」。
+              不管新版多好，用户随时能退回他熟悉的那一页，他才敢留下来试。 */}
+          <Space size={4}>
+            {entry.legacyPage && (
+              <Link to={`/legacy/${entry.legacyPage.key}`}>
+                <Button size="small" icon={<ArrowLeftOutlined />}>
+                  回到旧版
+                </Button>
+              </Link>
+            )}
+            <Tooltip title="这个入口锁定了数据集；要看别的数据集，去完整查询页">
+              <Link to={`/query?ds=${encodeURIComponent(entry.datasetKey)}`}>
+                <Button size="small" icon={<AppstoreOutlined />}>
+                  全部数据集
+                </Button>
+              </Link>
+            </Tooltip>
+          </Space>
+        </div>
         {entry.note && (
           <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 0' }}>
             {entry.note}
@@ -80,7 +110,11 @@ export default function EntryPage({ datasets }: Props) {
         )}
       </div>
       <QueryPage
-        locked={{ key: entry.datasetKey, hint: `这个数据集由「${entry.title}」入口固定，换数据集请去可视化查询页` }}
+        locked={{
+          key: entry.datasetKey,
+          query: entry.defaultQuery,
+          hint: `这个数据集由「${entry.title}」入口固定，换数据集请用右上角「全部数据集」`,
+        }}
       />
     </div>
   );
