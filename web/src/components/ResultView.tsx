@@ -99,6 +99,10 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
   // 默认落在表格：查数首先是要看到数，图只是可选的呈现方式。
   const [tab, setTab] = useState<TabKey>('table');
   const [fullscreen, setFullscreen] = useState(false);
+  // 柱状图的排列方式。系列一多（比如 日期 × 渠道），分组柱会糊成一片，
+  // 堆叠至少能回答「总量和构成」，所以给一个显式开关而不是替用户猜。
+  const [stacked, setStacked] = useState(false);
+  // 派生列：跟着这一次结果走，换查询就清空（列名可能完全不同）
   const chartBoxRef = useRef<HTMLDivElement>(null);
   const fullBoxRef = useRef<HTMLDivElement>(null);
 
@@ -248,6 +252,10 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
 
   // 某些图在当前字段组合下画不出来：直接把对应 tab 置灰并说明原因，
   // 而不是让用户点进去看到一张莫名其妙的图。
+  // 堆叠只对「同一个指标按维度拆开」有意义。多个指标堆在一起是把
+  // 消耗和点击数相加——量纲不同，加出来的数没有含义，图还很唬人。
+  const canStack = !!resolvedGroup && resolvedYs.length === 1 && series.length > 1;
+
   const pieAvailable = resolvedYs.length === 1 && !resolvedGroup && xCount >= 3 && xCount <= 12;
   const lineAvailable = dimCols.length > 0;
   const unavailable = useMemo(() => {
@@ -256,6 +264,9 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     if (!lineAvailable) map.line = '折线图至少需要一个维度才能画趋势';
     return map;
   }, [pieAvailable, lineAvailable]);
+
+  // 换了一份结果后可能不再具备堆叠条件，状态跟着收回，避免下次进来还是堆叠
+  const stackActive = canStack && stacked;
 
   const chartNode = (boxRef: RefObject<HTMLDivElement>, h: number, type: ChartType) => (
     <div ref={boxRef}>
@@ -277,6 +288,7 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     if (!result) return;
     const head = result.columns.map((c) => csvCell(c.name)).join(',');
     const body = result.rows.map((r) => r.map(csvCell).join(','));
+    const stamp = dayjs().format('YYYYMMDD-HHmm');
     // BOM：不加的话 Excel 打开中文会乱码
     const blob = new Blob(['﻿' + [head, ...body].join('\r\n')], {
       type: 'text/csv;charset=utf-8',
@@ -357,6 +369,22 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
           <Button size="small" icon={<DownloadOutlined />} onClick={downloadPng}>
             PNG
           </Button>
+          {canStack && (
+            <Segmented
+              size="small"
+              value={stackActive ? 'stack' : 'group'}
+              onChange={(v) => setStacked(v === 'stack')}
+              options={[
+                { label: '分组', value: 'group' },
+                { label: '堆叠', value: 'stack' },
+              ]}
+            />
+          )}
+          {canStack && !stackActive && series.length >= 4 && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              系列较多，堆叠更易看总量
+            </Typography.Text>
+          )}
         </Space>
 
         {dimCols.length === 0 && (

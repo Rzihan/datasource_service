@@ -30,6 +30,17 @@ interface Props {
   xCount?: number; // X 类目数，过多时加 slider
   xLabel?: string;
   yLabel?: string;
+  // 柱状图的排列方式：分组（比较单个值）或堆叠（看总量构成）
+  stacked?: boolean;
+}
+
+// 轴标签压缩：ISO 日期只保留月-日。
+// 20 个「2026-10-01」竖着排会占掉半张图，而年份在同一个查询里几乎总是相同。
+function shortAxisLabel(v: unknown): string {
+  const s = String(v ?? '');
+  const m = /^\d{4}-(\d{2}-\d{2})(?:[ T](\d{2}:\d{2}))?/.exec(s);
+  if (m) return m[2] ? `${m[1]} ${m[2]}` : m[1];
+  return s;
 }
 
 // 轴刻度用紧凑单位：金额类指标动辄上亿，全位数会把轴标签挤爆。
@@ -51,12 +62,17 @@ export default function ChartView({
   xCount = 0,
   xLabel,
   yLabel,
+  stacked = false,
 }: Props) {
-  // 轴标签防重叠：类目多时自动旋转 + 自动隐藏，再多就上滑块
+  // 轴标签防重叠：宁可少显示几个，也不竖排。
+  // 旋转 90° 的标签要歪头读，20 个类目时基本等于没有标签；
+  // 自动隐藏 + 缩短日期格式，剩下的仍然可读，tooltip 里有完整值。
   const xAxis: Record<string, unknown> = {
     title: xLabel || null,
-    labelAutoRotate: true,
+    labelAutoRotate: false,
     labelAutoHide: true,
+    labelAutoHideGap: 8,
+    labelFormatter: shortAxisLabel,
   };
   const yAxis: Record<string, unknown> = {
     title: yLabel || null,
@@ -116,13 +132,18 @@ export default function ChartView({
     axis: { x: xAxis, y: yAxis },
     slider,
     tooltip,
-    legend: series.length > 1 ? { position: 'top' } : false,
+    // 图例换行而不是被压扁：8 条系列挤在一行时每条只剩几个像素，
+    // 颜色对不上名字，图例就白放了。
+    legend:
+      series.length > 1
+        ? { position: 'top', layout: { justifyContent: 'flex-start', flexWrap: 'wrap' } }
+        : false,
   };
 
   if (type === 'column') {
     // 多系列必须显式 dodge：否则每条都按整个类目宽度画，后画的盖住先画的，
     // 看着像「只有一个颜色」。@ant-design/plots v2 不认 group 属性，只能用 transform。
-    if (series.length > 1) cfg.transform = [{ type: 'dodgeX' }];
+    if (series.length > 1) cfg.transform = stacked ? [{ type: 'stackY' }] : [{ type: 'dodgeX' }];
     // 系列少、类目也少时柱子会铺满整格，糊成一条色块，用 band padding 收窄
     if (series.length <= 2) cfg.scale = { x: { padding: 0.6 } };
     return <LColumn {...cfg} />;
