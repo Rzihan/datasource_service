@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { App, Alert, Button, DatePicker, InputNumber, Select, Space, Tag, Typography } from 'antd';
+import { App, Alert, Button, DatePicker, InputNumber, Select, Space, Switch, Tag, Typography } from 'antd';
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
 import { ClearOutlined, SearchOutlined } from '@ant-design/icons';
-import type { FilterNode, OrderBy, QueryDataset } from '../types';
+import type { CompareRequest, FilterNode, OrderBy, QueryDataset } from '../types';
 import FilterTreeEditor from './FilterTreeEditor';
 import { countLeaves, emptyRoot, findRange, removeFields, stripRange, withRange } from '../utils/filterTree';
 
@@ -26,6 +26,8 @@ interface Props {
   onRequestDimValues: (field: string) => void;
   onExecute: () => void;
   loading: boolean;
+  compare: CompareRequest | null;
+  onCompareChange: (next: CompareRequest | null) => void;
 }
 
 export default function QueryBuilder(props: Props) {
@@ -37,6 +39,7 @@ export default function QueryBuilder(props: Props) {
     limit, onLimitChange,
     dimValues, dimValueLoading, onRequestDimValues,
     onExecute, loading,
+    compare, onCompareChange,
   } = props;
   const { modal } = App.useApp();
 
@@ -255,6 +258,54 @@ export default function QueryBuilder(props: Props) {
               </Typography.Text>
             )}
           </div>
+        </div>
+      )}
+
+      {dateDimOptions.length > 0 && (
+        <div>
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              对比周期
+            </Typography.Text>
+            <Switch
+              size="small"
+              checked={!!compare}
+              disabled={metrics.length === 0}
+              onChange={(on) =>
+                onCompareChange(on ? { mode: 'prev_period', field: rangeField || dateDimOptions[0] } : null)
+              }
+            />
+          </Space>
+          {metrics.length === 0 && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              对比需要至少一个指标
+            </Typography.Text>
+          )}
+          {compare && (
+            <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Select
+                style={{ width: '100%' }}
+                value={compare.mode}
+                onChange={(v) => onCompareChange({ ...compare, mode: v })}
+                options={[
+                  { value: 'prev_period', label: '上一个等长周期（环比）' },
+                  { value: 'prev_year', label: '去年同期（同比）' },
+                ]}
+              />
+              <Select
+                style={{ width: '100%' }}
+                value={compare.field}
+                onChange={(v) => onCompareChange({ ...compare, field: v })}
+                options={dateDimOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
+              />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {range
+                  ? `本期 ${range.from} ~ ${range.to}，服务端按同一口径再查一次上期`
+                  : '未设时间范围时会先探测数据覆盖区间，再按同一口径查上期'}
+                ；结果被截断时不给对比，避免漏掉分组算出错的变化率。
+              </Typography.Text>
+            </div>
+          )}
         </div>
       )}
 

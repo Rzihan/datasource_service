@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Card, Col, Row, Tooltip, Typography } from 'antd';
-import type { QueryResult, StringMap } from '../types';
+import type { CompareMeta, QueryResult, StringMap } from '../types';
 import { columnDigits, formatScaled, numericText, parseScaled, sumColumn } from '../utils/format';
 
 // 查完数第一眼看的不是表，是「规模有多大、集中在谁身上」。
@@ -16,6 +16,8 @@ interface Props {
   metrics: string[];
   labelMap: StringMap;
   nonAdditive: string[];
+  // 有对比周期时，卡片多一行「环比 +12.4%」——这是看板上最想先看到的那个数
+  compare?: CompareMeta;
 }
 
 const MAX_CARDS = 4;
@@ -48,7 +50,7 @@ function Sparkline({ values }: { values: Array<number | null> }) {
   );
 }
 
-export default function MetricCards({ result, dims, metrics, labelMap, nonAdditive }: Props) {
+export default function MetricCards({ result, dims, metrics, labelMap, nonAdditive, compare }: Props) {
   const nonAdditiveSet = useMemo(() => new Set(nonAdditive), [nonAdditive]);
 
   // 时间列：X 轴是日期时，卡片上带一条迷你趋势
@@ -130,11 +132,42 @@ export default function MetricCards({ result, dims, metrics, labelMap, nonAdditi
                 : `行均值 · 范围 ${lo.toFixed(dp)} ~ ${hi.toFixed(dp)}`;
         }
 
+        // 环比：可加指标比相对变化，比率类比百分点差
+        let delta: { text: string; up: boolean; flat: boolean } | null = null;
+        const prevArr = compare?.prev_values?.[m];
+        if (prevArr && prevArr.length > 0) {
+          if (additive) {
+            const prevTotal = sumColumn(prevArr, digits);
+            if (prevTotal !== 0n) {
+              const pct = (Number(total - prevTotal) / Math.abs(Number(prevTotal))) * 100;
+              delta = {
+                text: `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%`,
+                up: pct > 0,
+                flat: Math.abs(pct) < 0.05,
+              };
+            }
+          } else {
+            const prevNums = prevArr.map((v) => parseScaled(v, digits)).filter((v): v is bigint => v !== null);
+            if (prevNums.length > 0) {
+              const prevMean = Number(prevNums.reduce((a, b) => a + b, 0n)) / prevNums.length / Number(scale);
+              const curNums = numeric.filter((v): v is number => v !== null);
+              const curMean = curNums.length > 0 ? curNums.reduce((a, b) => a + b, 0) / curNums.length : 0;
+              const pp = curMean - prevMean;
+              delta = {
+                text: `${pp > 0 ? '+' : ''}${pp.toFixed(digits > 0 ? digits : 2)}pp`,
+                up: pp > 0,
+                flat: Math.abs(pp) < 1e-9,
+              };
+            }
+          }
+        }
+
         return {
           key: m,
           title: labelMap[m] || m,
           big,
           sub,
+          delta,
           hint: additive
             ? '可累加指标：所有返回行求和'
             : '比率/均值/去重类指标不能相加，这里显示的是各分组值的算术平均，整体口径请去掉分组再查一次',
@@ -143,7 +176,7 @@ export default function MetricCards({ result, dims, metrics, labelMap, nonAdditi
       })
       .filter((c): c is NonNullable<typeof c> => c !== null)
       .slice(0, MAX_CARDS);
-  }, [metrics, result, nonAdditiveSet, timeIdx, firstDimIdx, labelMap]);
+  }, [metrics, result, nonAdditiveSet, timeIdx, firstDimIdx, labelMap, compare]);
 
   if (cards.length === 0) return null;
 
@@ -177,9 +210,23 @@ export default function MetricCards({ result, dims, metrics, labelMap, nonAdditi
                 </div>
                 {c.spark && <Sparkline values={c.spark} />}
               </div>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {c.sub}
-              </Typography.Text>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                {c.delta && (
+                  <span
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      fontVariantNumeric: 'tabular-nums',
+                      color: c.delta.flat ? '#8c8c8c' : c.delta.up ? '#cf1322' : '#3f8600',
+                    }}
+                  >
+                    {compare?.mode === 'prev_year' ? '同比' : '环比'} {c.delta.text}
+                  </span>
+                )}
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {c.sub}
+                </Typography.Text>
+              </div>
             </Card>
           </Tooltip>
         </Col>

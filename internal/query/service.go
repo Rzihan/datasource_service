@@ -358,6 +358,30 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 		return nil, err
 	}
 
+	res, err := s.runQuery(ctx, ds, midSQL, req, tenants, users, operator)
+	if err != nil {
+		return nil, err
+	}
+	if req.Compare == nil {
+		return res, nil
+	}
+	if err := s.attachCompare(ctx, ds, midSQL, req, res, tenants, users, operator); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// runQuery 把「一份意图 → 一份结果」的完整链路收在一处：
+// 组装 SQL、过并发闸门、执行、按上限裁掉探针行、打日志。
+// 对比周期需要跑两遍同一件事，抽出来才不会两处各写一遍、慢慢长歪。
+func (s *Service) runQuery(
+	ctx context.Context,
+	ds *model.DatasetConfig,
+	midSQL string,
+	req *ExecuteRequest,
+	tenants, users []string,
+	operator string,
+) (*ExecuteResult, error) {
 	sqlText, params, err := Build(Spec{
 		DatasetKey:   ds.DatasetKey,
 		MidSQL:       midSQL,
@@ -498,4 +522,143 @@ func (s *Service) DimValues(ctx context.Context, datasetKey, field string, tenan
 		values = append(values, fmt.Sprint(row[0]))
 	}
 	return values, nil
+}
+
+// ---- 对比周期（同环比）----
+
+// attachCompare 跑一遍上期查询并把结果对齐到 base 上。
+//
+// 刻意做成「再跑一次同一份查询」而不是在 SQL 里写窗口函数/LAG：
+// 数据是按任意维度分组的，上期的行集合和本期不一定一一对应，
+// LAG 只能按行号错位对齐，维度组合一变就全错。两次查询 + 按维度元组对齐才是对的。
+func (s *Service) attachCompare(
+	ctx context.Context,
+	ds *model.DatasetConfig,
+	midSQL string,
+	req *ExecuteRequest,
+	base *ExecuteResult,
+	tenants, users []string,
+	operator string,
+) error {
+	cmp := req.Compare
+	if len(req.Metrics) == 0 {
+		return fmt.Errorf("%w: 对比周期需要至少一个指标——纯维度查询没有可比的数", ErrInvalidQuery)
+	}
+	// 本期结果被截断时，缺失的维度组合会被误当成「上期没有」，
+	// 算出来的变化率是错的。宁可让用户先放宽上限，也不给一个看着正常的错数。
+	if base.Truncated {
+		return fmt.Errorf("%w: 当前结果已按上限截断，环比会漏掉被截掉的分组；请先放宽返回上限或加筛选条件", ErrInvalidQuery)
+	}
+	expr, ok := ds.DimMap[cmp.Field]
+	if !ok || strings.TrimSpace(expr) == "" {
+		return fmt.Errorf("%w: 对比字段 %q 必须是普通日期维度（dim_map 的键）", ErrInvalidQuery, cmp.Field)
+	}
+
+	from, to, found := FindDateRange(req.Filter, cmp.Field)
+	inferred := !found
+	if inferred {
+		// 用户没设时间范围（默认查全量）：先探一次数据覆盖区间，
+		// 否则「上一个等长周期」无从算起。探的是同一份 mid_sql + 同样的行级权限。
+		lo, hi, err := s.probeDateRange(ctx, midSQL, expr, buildRowFilters(ds, tenants, users))
+		if err != nil {
+			return err
+		}
+		from, to = lo, hi
+	}
+
+	baseFrom, err := parseDatePart(from)
+	if err != nil {
+		return err
+	}
+	baseTo, err := parseDatePart(to)
+	if err != nil {
+		return err
+	}
+	prevFrom, prevTo, err := ShiftPeriod(baseFrom, baseTo, cmp.Mode)
+	if err != nil {
+		return err
+	}
+
+	prevFilter := ReplaceRange(derefFilter(req.Filter), cmp.Field,
+		prevFrom.Format(dateLayout), prevTo.Format(dateLayout))
+
+	prevReq := *req
+	prevReq.Compare = nil
+	prevReq.Filter = &prevFilter
+
+	prevRes, err := s.runQuery(ctx, ds, midSQL, &prevReq, tenants, users, operator)
+	if err != nil {
+		return err
+	}
+	prevTruncated := prevRes.Truncated
+
+	// 对比字段本身也是分组维度时（按天看周同比），两期日期不重叠，
+	// 必须先把上期日期整体平移到本期时间轴上，否则一行都配不上。
+	if idx := indexOfField(req.Dims, cmp.Field); idx >= 0 {
+		ShiftDimDates(prevRes, idx, int(baseFrom.Sub(prevFrom).Hours()/24))
+	}
+
+	merged, meta := MergeCompare(base, prevRes, req.Dims, req.Metrics)
+	meta.Mode = cmp.Mode
+	meta.Field = cmp.Field
+	meta.BaseFrom = baseFrom.Format(dateLayout)
+	meta.BaseTo = baseTo.Format(dateLayout)
+	meta.PrevFrom = prevFrom.Format(dateLayout)
+	meta.PrevTo = prevTo.Format(dateLayout)
+	meta.BaseInferred = inferred
+	meta.PrevTruncated = prevTruncated
+
+	*base = *merged
+	base.Compare = meta
+	return nil
+}
+
+// probeDateRange 取某个日期维度的最小 / 最大值。表为空时返回错误，
+// 让调用方给出「这段时间没有数据」而不是一个 0001-01-01 的区间。
+func (s *Service) probeDateRange(ctx context.Context, midSQL, expr string, rowFilters []RowFilter) (string, string, error) {
+	sqlText, params := BuildDateRangeSQL(midSQL, expr, rowFilters)
+	res, err := s.engine.Query(ctx, sqlText, params)
+	if err != nil {
+		return "", "", err
+	}
+	if len(res.Rows) == 0 || len(res.Rows[0]) < 2 {
+		return "", "", fmt.Errorf("%w: 数据里没有可用的日期", ErrInvalidQuery)
+	}
+	lo := strings.TrimSpace(fmt.Sprintf("%v", res.Rows[0][0]))
+	hi := strings.TrimSpace(fmt.Sprintf("%v", res.Rows[0][1]))
+	if lo == "" || hi == "" || lo == "<nil>" || hi == "<nil>" {
+		return "", "", fmt.Errorf("%w: 数据里没有可用的日期", ErrInvalidQuery)
+	}
+	return lo, hi, nil
+}
+
+func derefFilter(n *FilterNode) FilterNode {
+	if n == nil {
+		return FilterNode{Logic: LogicAnd}
+	}
+	return *n
+}
+
+// parseDatePart 只取日期部分：日期维度可能带时分秒（stat_ts），
+// 比周期时按天对齐就够了，多出来的时间会把「等长周期」算歪。
+func parseDatePart(v string) (time.Time, error) {
+	v = strings.TrimSpace(v)
+	if len(v) > 10 {
+		v = v[:10]
+	}
+	t, err := time.Parse(dateLayout, v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: 无法识别的日期 %q", ErrInvalidQuery, v)
+	}
+	return t, nil
+}
+
+// indexOfField 返回字段在维度列表里的下标，没有则 -1。
+func indexOfField(list []string, field string) int {
+	for i, v := range list {
+		if v == field {
+			return i
+		}
+	}
+	return -1
 }

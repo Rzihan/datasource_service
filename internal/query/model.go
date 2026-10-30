@@ -17,10 +17,10 @@ const (
 	// 多值维度专用：判断数组列是否包含某些值。
 	// 不复用 = / in —— 数组列的「相等」没有直观语义，
 	// 用 has 系列把「包含 / 包含任一 / 包含全部」说清楚。
-	OpHas      = "has"
-	OpHasNot   = "has_not"
-	OpHasAny   = "has_any"
-	OpHasAll   = "has_all"
+	OpHas    = "has"
+	OpHasNot = "has_not"
+	OpHasAny = "has_any"
+	OpHasAll = "has_all"
 	// 空值判断。可空维度里 NULL 是一类真实数据（未归因流量），
 	// 没有这两个操作符时用户既筛不掉它、也单独看不出来，做占比分母还含着它。
 	OpIsNull    = "is_null"
@@ -96,6 +96,46 @@ type OrderBy struct {
 	Desc  bool   `json:"desc"`
 }
 
+// 对比周期的两种口径。
+//   - PrevPeriod：上一个等长周期（近 7 天 vs 再往前 7 天）——周报最常用
+//   - PrevYear：去年同期（近 30 天 vs 去年这 30 天）——季节性业务用
+//
+// 不做「上月同期」：月份长度不固定，怎么对齐都有争议，不如让用户自己选区间。
+const (
+	ComparePrevPeriod = "prev_period"
+	ComparePrevYear   = "prev_year"
+)
+
+// Compare 对比周期。Field 必须是普通日期维度（dim_map 的键），
+// 多值维度是数组，没有「区间」的概念。
+type Compare struct {
+	Mode  string `json:"mode"`
+	Field string `json:"field"`
+}
+
+// CompareMeta 对比结果的口径与对齐后的上期值。
+//
+// 上期值用「与 rows 一一对应的数组」返回，而不是往主表里插列：
+//   - 主表的列名/列序保持不变，前端所有既有逻辑（排序、合计、导出、图表）不用改；
+//   - 上期可能多出本期没有的维度组合（客户上月有交付、这个月没有），
+//     这些行会被补到末尾，Base 侧为 NULL，Frontend 需要知道补了几行。
+type CompareMeta struct {
+	Mode     string `json:"mode"`
+	Field    string `json:"field"`
+	BaseFrom string `json:"base_from"`
+	BaseTo   string `json:"base_to"`
+	PrevFrom string `json:"prev_from"`
+	PrevTo   string `json:"prev_to"`
+	// PrevValues[metric][rowIndex]，与 Rows 对齐。对不上的位置为 nil。
+	PrevValues map[string][]any `json:"prev_values"`
+	// AddedRows 上期有、本期没有的维度组合数（这些行已补在 Rows 末尾，本期指标为 NULL）
+	AddedRows int `json:"added_rows"`
+	// BaseInferred 本期区间是探测出来的（用户没设时间范围），而不是用户显式给的
+	BaseInferred bool `json:"base_inferred"`
+	// PrevTruncated 上期结果也被上限截断过，此时「上期没有」可能是「没取到」
+	PrevTruncated bool `json:"prev_truncated"`
+}
+
 // ExecuteRequest 是「查询意图」，不是 SQL。
 // 前端只描述想看什么，SQL 完全由后端生成，用户不感知 SQL 的存在。
 type ExecuteRequest struct {
@@ -105,6 +145,8 @@ type ExecuteRequest struct {
 	Filter     *FilterNode `json:"filter"`
 	OrderBy    []OrderBy   `json:"order_by"`
 	Limit      int         `json:"limit"`
+	// Compare 非空时，服务端会按同一口径再查一次上期，并把结果对齐后放进 CompareMeta。
+	Compare *Compare `json:"compare,omitempty"`
 }
 
 // QueryDataset 是查询页看到的数据集。
@@ -134,4 +176,6 @@ type ExecuteResult struct {
 	RowCount  int      `json:"row_count"`
 	ElapsedMs int64    `json:"elapsed_ms"`
 	Truncated bool     `json:"truncated"`
+	// Compare 只在请求带 compare 时出现
+	Compare *CompareMeta `json:"compare,omitempty"`
 }

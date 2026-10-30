@@ -5,7 +5,7 @@ import { DeleteOutlined, HistoryOutlined, LinkOutlined } from '@ant-design/icons
 import QueryBuilder from '../components/QueryBuilder';
 import ResultView from '../components/ResultView';
 import { executeQuery, fetchDimValues, fetchQueryDatasets } from '../api';
-import type { FilterNode, OrderBy, QueryDataset, QueryResult } from '../types';
+import type { CompareRequest, FilterNode, OrderBy, QueryDataset, QueryResult } from '../types';
 import { emptyRoot, countLeaves, describeFilter, pruneEmpty } from '../utils/filterTree';
 import { isAdditiveMetric } from '../utils/format';
 import type { HistoryEntry } from '../utils/queryHistory';
@@ -22,6 +22,7 @@ interface QueryIntent {
   filterTree: FilterNode;
   orderBy: OrderBy | null;
   limit: number;
+  compare: CompareRequest | null;
 }
 
 const MAX_LIMIT = 10000;
@@ -37,6 +38,9 @@ export default function QueryPage() {
   const [filterTree, setFilterTree] = useState<FilterNode>(emptyRoot());
   const [orderBy, setOrderBy] = useState<OrderBy | null>(null);
   const [limit, setLimit] = useState(1000);
+  // 对比周期：开不开是一回事，「跟哪个日期维度比」是另一回事，
+  // 两者一起进 URL 才能把一张带环比的图发给同事。
+  const [compare, setCompare] = useState<CompareRequest | null>(null);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [querying, setQuerying] = useState(false);
   const [error, setError] = useState<string>('');
@@ -70,6 +74,7 @@ export default function QueryPage() {
           filter: pruned ?? undefined,
           order_by: intent.orderBy ? [intent.orderBy] : [],
           limit: intent.limit,
+          compare: intent.compare ?? undefined,
         });
         setResult(res);
         // 历史是「查过什么」的记录，只在成功后写：失败的那次没有参考价值
@@ -129,10 +134,18 @@ export default function QueryPage() {
       setDims(dims);
       setMetrics(metrics);
       setFilterTree(filter);
+      const cmpMode = sp.get('cmp');
+      const cmpField = sp.get('cmpf') ?? '';
+      const cmp: CompareRequest | null =
+        (cmpMode === 'prev_period' || cmpMode === 'prev_year') && cmpField in ds.dim_map
+          ? { mode: cmpMode, field: cmpField }
+          : null;
+
       setOrderBy(order);
       setLimit(safeLimit);
+      setCompare(cmp);
       if (dims.length > 0 || metrics.length > 0) {
-        void execute({ key, dims, metrics, filterTree: filter, orderBy: order, limit: safeLimit });
+        void execute({ key, dims, metrics, filterTree: filter, orderBy: order, limit: safeLimit, compare: cmp });
       }
     },
     [execute],
@@ -178,11 +191,15 @@ export default function QueryPage() {
         next.set('dir', orderBy.desc ? 'desc' : 'asc');
       }
       next.set('limit', String(limit));
+      if (compare) {
+        next.set('cmp', compare.mode);
+        next.set('cmpf', compare.field);
+      }
     }
     if (next.toString() !== searchParams.toString()) {
       setSearchParams(next, { replace: true });
     }
-  }, [selectedKey, dims, metrics, filterTree, orderBy, limit, searchParams, setSearchParams]);
+  }, [selectedKey, dims, metrics, filterTree, orderBy, limit, compare, searchParams, setSearchParams]);
 
   const selected = useMemo(
     () => datasets.find((d) => d.dataset_key === selectedKey) ?? null,
@@ -197,6 +214,7 @@ export default function QueryPage() {
       setMetrics([]);
       setFilterTree(emptyRoot());
       setOrderBy(null);
+      setCompare(null);
       setResult(null);
       setError('');
       setDimValues({});
@@ -210,6 +228,7 @@ export default function QueryPage() {
     setMetrics([]);
     setFilterTree(emptyRoot());
     setOrderBy(null);
+    setCompare(null);
     setResult(null);
     setError('');
     setDimValues({});
@@ -237,7 +256,7 @@ export default function QueryPage() {
   // 用当前界面状态查数
   const onExecute = () => {
     if (!selectedKey) return;
-    void execute({ key: selectedKey, dims, metrics, filterTree, orderBy, limit });
+    void execute({ key: selectedKey, dims, metrics, filterTree, orderBy, limit, compare });
   };
 
   // 从结果页放宽返回上限：点了「放宽到 5000」就得带着新上限重查一次，
@@ -245,7 +264,7 @@ export default function QueryPage() {
   const setLimitAndQuery = (next: number) => {
     setLimit(next);
     if (!selectedKey) return;
-    void execute({ key: selectedKey, dims, metrics, filterTree, orderBy, limit: next });
+    void execute({ key: selectedKey, dims, metrics, filterTree, orderBy, limit: next, compare });
   };
 
   // 历史回填：一次性替换全部条件再查，而不是让用户自己回忆当时筛了什么
@@ -269,6 +288,7 @@ export default function QueryPage() {
       filterTree: entry.filterTree,
       orderBy: entry.orderBy ?? null,
       limit: entry.limit,
+      compare,
     });
   };
 
@@ -338,6 +358,8 @@ export default function QueryPage() {
               onRequestDimValues={onRequestDimValues}
               onExecute={onExecute}
               loading={querying}
+              compare={compare}
+              onCompareChange={setCompare}
             />
           )}
         </Card>

@@ -21,7 +21,7 @@ type Spec struct {
 	MultiDimMap map[string]string
 	MtxMap      map[string]string
 	Dims        []string
-	Metrics    []string
+	Metrics     []string
 	// Filter 是过滤条件树，支持 AND / OR 任意嵌套；为 nil 表示不加过滤。
 	Filter *FilterNode
 	// RowFilters 是行级权限条件，由服务端根据数据集配置与登录态合成。

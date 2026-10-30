@@ -115,6 +115,53 @@ function renderCell(value: unknown, numeric: boolean, digits: number) {
   return String(value);
 }
 
+// 涨红跌绿是中文语境下的默认约定（与欧美相反）。
+// 用中性灰表示「持平/无法计算」，别让 0% 也染成红色。
+function deltaColor(v: number | null): string | undefined {
+  if (v === null || Math.abs(v) < 0.05) return undefined;
+  return v > 0 ? '#cf1322' : '#3f8600';
+}
+
+// 环比单元格：上期值在上、变化在下。
+// 比率类指标用「百分点」而不是「百分比的变化」——通过率从 88% 到 90% 是 +2pp，
+// 说成 +2.3% 会让人以为只涨了 2 个千分点。
+function CompareCell({
+  prev,
+  cur,
+  pct,
+  points,
+  additive,
+  digits,
+}: {
+  prev: number | null;
+  cur: number | null;
+  pct: number | null;
+  points: number | null;
+  additive: boolean;
+  digits: number;
+}) {
+  if (prev === null && cur === null) return <Typography.Text type="secondary">—</Typography.Text>;
+  const delta = additive ? pct : points;
+  const text =
+    delta === null ? '—' : `${delta > 0 ? '+' : ''}${delta.toFixed(additive ? 1 : Math.max(digits, 2))}${additive ? '%' : 'pp'}`;
+  const tip =
+    prev === null
+      ? '上期没有这个分组'
+      : cur === null
+        ? '本期没有这个分组（上期有）'
+        : `上期 ${prev}${additive ? '' : ''}`;
+  return (
+    <Tooltip title={tip}>
+      <div style={{ lineHeight: 1.25, textAlign: 'right' }}>
+        <div style={{ fontVariantNumeric: 'tabular-nums', fontSize: 12, color: '#8c8c8c' }}>
+          {prev === null ? '—' : prev.toLocaleString('zh-CN', { maximumFractionDigits: digits })}
+        </div>
+        <div style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: deltaColor(delta) }}>{text}</div>
+      </div>
+    </Tooltip>
+  );
+}
+
 function csvCell(v: unknown): string {
   if (v === null || v === undefined) return '';
   const s = String(v);
@@ -307,6 +354,73 @@ export default function ResultView({
     [derived],
   );
 
+  // ---- 环比列 ----
+  // 后端把上期值按维度对齐成与 rows 等长的一维数组，前端只负责算变化并展示。
+  // 计算放在这里而不是渲染里，是为了让表头排序也能按变化率排。
+  const cmpMeta = result?.compare;
+  const cmpMetrics = useMemo(
+    () => (cmpMeta ? metrics.filter((m) => colNames.includes(m)) : []),
+    [cmpMeta, metrics, colNames],
+  );
+
+  const cmpValues = useMemo(() => {
+    if (!cmpMeta || !result) return [] as Array<Array<{ prev: number | null; pct: number | null; points: number | null }>>;
+    return cmpMetrics.map((m) => {
+      const arr = cmpMeta.prev_values?.[m] ?? [];
+      const idx = colNames.indexOf(m);
+      const additive = !nonAdditive.includes(m);
+      // 上期值就是「按下标对齐」的一维数组：后端已经按维度元组配好序，
+      // 这里直接按下标取，不用再猜。
+      return result.rows.map((row, i) => {
+        const cur = toNumber(row[idx]);
+        const prev = toNumber(arr[i]);
+        if (prev === null) return { prev: null, pct: null, points: null };
+        const points = cur === null ? null : cur - prev;
+        const pct = cur === null || prev === 0 ? null : ((cur - prev) / Math.abs(prev)) * 100;
+        return { prev, pct: additive ? pct : null, points: additive ? null : points };
+      });
+    });
+  }, [cmpMeta, result, cmpMetrics, colNames, nonAdditive]);
+
+  const compareColumns = useMemo(
+    () =>
+      cmpMetrics.map((m, i) => {
+        const digits = columnMeta.find((c) => c.name === m)?.digits ?? 2;
+        const additive = !nonAdditive.includes(m);
+        return {
+          title: (
+            <Tooltip
+              title={`与 ${cmpMeta?.prev_from} ~ ${cmpMeta?.prev_to} 对比。${
+                additive ? '变化率以「上期」为分母' : '比率类指标看百分点差（pp），不看相对变化'
+              }`}
+            >
+              <span style={{ whiteSpace: 'nowrap' }}>{labelMap[m] || m} 环比</span>
+            </Tooltip>
+          ),
+          dataIndex: `cmp${i}`,
+          key: `cmp${i}`,
+          align: 'right' as const,
+          width: 156,
+          render: (_: unknown, row: Record<string, unknown>) => (
+            <CompareCell
+              prev={row[`cmp${i}`] as number | null}
+              cur={row[`cur${i}`] as number | null}
+              pct={row[`pct${i}`] as number | null}
+              points={row[`pts${i}`] as number | null}
+              additive={additive}
+              digits={digits}
+            />
+          ),
+          sorter: (a: Record<string, unknown>, b: Record<string, unknown>) => {
+            const av = (a[`${additive ? 'pct' : 'pts'}${i}`] as number | null) ?? Number.NEGATIVE_INFINITY;
+            const bv = (b[`${additive ? 'pct' : 'pts'}${i}`] as number | null) ?? Number.NEGATIVE_INFINITY;
+            return av - bv;
+          },
+        };
+      }),
+    [cmpMetrics, columnMeta, nonAdditive, cmpMeta, labelMap],
+  );
+
   const dataSource = useMemo(() => {
     if (!result) return [];
     const xIdx = resolvedX ? colNames.indexOf(resolvedX) : -1;
@@ -327,8 +441,16 @@ export default function ResultView({
         row[`d${di}`] = col[i];
       });
     });
+    cmpValues.forEach((col, ci) => {
+      rows.forEach((row, i) => {
+        row[`cmp${ci}`] = col[i]?.prev ?? null;
+        row[`pct${ci}`] = col[i]?.pct ?? null;
+        row[`pts${ci}`] = col[i]?.points ?? null;
+        row[`cur${ci}`] = toNumber(result.rows[i][colNames.indexOf(cmpMetrics[ci])]);
+      });
+    });
     return rows;
-  }, [result, resolvedX, colNames, xIsTemporal, derivedData]);
+  }, [result, resolvedX, colNames, xIsTemporal, derivedData, cmpValues, cmpMetrics]);
 
   const exportRows = useMemo(() => {
     const rows = [...dataSource];
@@ -443,8 +565,19 @@ export default function ResultView({
         result.truncated ? '（结果已截断，不是全量）' : ''
       }`,
       ...(derived.length > 0 ? [`# 计算列：${derived.map((d) => `${d.name} = ${d.expr}`).join('；')}`] : []),
+      ...(result.compare
+        ? [
+            `# 对比：${result.compare.mode === 'prev_year' ? '同比' : '环比'} 上期 ${result.compare.prev_from} ~ ${result.compare.prev_to}` +
+              `（本期 ${result.compare.base_from} ~ ${result.compare.base_to}）` +
+              (result.compare.added_rows > 0 ? `，含 ${result.compare.added_rows} 个仅上期有的分组` : ''),
+          ]
+        : []),
     ];
-    const head = [...result.columns.map((c) => csvCell(c.name)), ...derived.map((d) => csvCell(d.name))].join(',');
+    const cmpHead = cmpMetrics.flatMap((m) => [
+      csvCell(`${labelMap[m] || m}_上期`),
+      csvCell(`${labelMap[m] || m}_变化`),
+    ]);
+    const head = [...result.columns.map((c) => csvCell(c.name)), ...derived.map((d) => csvCell(d.name)), ...cmpHead].join(',');
     // 导出的行序 = 当前表格的顺序（含表头排序），而不是后端返回顺序
     const body = exportRows.map((row) => {
       const base = result.columns.map((_, i) => csvCell(row[`c${i}`]));
@@ -453,7 +586,21 @@ export default function ResultView({
         const v = row[`d${di}`] as number | null | undefined;
         return v === null || v === undefined ? '' : csvCell(v.toFixed(4));
       });
-      return [...base, ...extra].join(',');
+      // 变化列用带符号的文本：导出的表里「+12.4%」比裸数好读，
+      // 也让 pp（百分点）与 %（相对变化）在同一个单元格里不会被混淆
+      const cmpCells = cmpMetrics.flatMap((m, ci) => {
+        const prev = row[`cmp${ci}`] as number | null | undefined;
+        const additive = !nonAdditive.includes(m);
+        const delta = additive ? (row[`pct${ci}`] as number | null) : (row[`pts${ci}`] as number | null);
+        const digits = columnMeta.find((c) => c.name === m)?.digits ?? 2;
+        return [
+          prev === null || prev === undefined ? '' : csvCell(prev),
+          delta === null || delta === undefined
+            ? ''
+            : csvCell(`${delta > 0 ? '+' : ''}${delta.toFixed(additive ? 1 : Math.max(digits, 2))}${additive ? '%' : 'pp'}`),
+        ];
+      });
+      return [...base, ...extra, ...cmpCells].join(',');
     });
     // BOM：不加的话 Excel 打开中文会乱码
     const blob = new Blob(['﻿' + [...meta, '', head, ...body].join('\r\n')], {
@@ -519,6 +666,11 @@ export default function ResultView({
   if (!result) {
     return <Empty style={{ marginTop: 80 }} description="选择维度与指标后点击「查数」" />;
   }
+
+  // 上期整段没有数据（比如拿只覆盖 30 天的数据集做同比）：
+  // 一排「—」不说明任何事，得直接告诉用户为什么是空的。
+  const allPrevEmpty =
+    !!result.compare && cmpValues.length > 0 && cmpValues.every((col) => col.every((v) => v.prev === null));
 
   // 没有任何维度 = 只有一行汇总值。这时候再摆一张 1 行的表，等于把卡片上的
   // 四个数字原封不动抄一遍；直接给「KPI 页」，需要的明细去导 CSV。
@@ -633,12 +785,48 @@ export default function ResultView({
         }
       />
 
+      {result.compare && (
+        <div style={{ marginBottom: 10 }}>
+          <Space size={8} wrap>
+            <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+              {result.compare.mode === 'prev_year' ? '同比' : '环比'}
+            </Tag>
+            <Typography.Text style={{ fontSize: 13 }}>
+              本期 <Typography.Text strong>{result.compare.base_from} ~ {result.compare.base_to}</Typography.Text>
+              {' ↔ '}上期{' '}
+              <Typography.Text strong>
+                {result.compare.prev_from} ~ {result.compare.prev_to}
+              </Typography.Text>
+            </Typography.Text>
+            {result.compare.base_inferred && (
+              <Tooltip title="没有设置时间范围，服务端先探测了数据覆盖区间再平移">
+                <Tag>本期区间由数据推断</Tag>
+              </Tooltip>
+            )}
+            {result.compare.added_rows > 0 && (
+              <Tooltip title="上期有、本期没有的维度组合已补在表格末尾，本期指标为空。少了它们，环比会显得比实际更好。">
+                <Tag color="orange">补入 {result.compare.added_rows} 个上期分组</Tag>
+              </Tooltip>
+            )}
+            {result.compare.prev_truncated && (
+              <Tag color="warning">上期结果也被截断，部分分组可能缺上期值</Tag>
+            )}
+            {allPrevEmpty && (
+              <Tooltip title="上期区间内一行数据都没有，所以所有对比都是空的。常见原因：数据集只覆盖近 30 天，去年同期自然为空。">
+                <Tag color="error">上期区间没有数据，无法对比</Tag>
+              </Tooltip>
+            )}
+          </Space>
+        </div>
+      )}
+
       <MetricCards
         result={result}
         dims={dims}
         metrics={metrics}
         labelMap={labelMap}
         nonAdditive={nonAdditive}
+        compare={result.compare}
       />
 
       {recommendation && !singleSummary && (
@@ -669,7 +857,7 @@ export default function ResultView({
             children: (
               <Table
                 size="small"
-                columns={[...columns, ...derivedColumns]}
+                columns={[...columns, ...derivedColumns, ...compareColumns]}
                 dataSource={dataSource}
                 scroll={{ x: 'max-content' }}
                 summary={() => summaryRow}

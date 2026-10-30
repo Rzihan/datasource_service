@@ -110,6 +110,30 @@ export interface OrderBy {
   desc: boolean;
 }
 
+// 对比周期。prev_period = 上一个等长周期，prev_year = 去年同期。
+export type CompareMode = 'prev_period' | 'prev_year';
+
+export interface CompareRequest {
+  mode: CompareMode;
+  // 必须是普通日期维度（dim_map 的键）
+  field: string;
+}
+
+// 后端算好的对比口径与上期值。上期值是按维度对齐后的一维数组，
+// 与 rows 一一对应；上期独有的组合会被补成一行（本期指标为 null）。
+export interface CompareMeta {
+  mode: CompareMode;
+  field: string;
+  base_from: string;
+  base_to: string;
+  prev_from: string;
+  prev_to: string;
+  prev_values: Record<string, Array<unknown>>;
+  added_rows: number;
+  base_inferred: boolean;
+  prev_truncated: boolean;
+}
+
 // 查询意图：前端只描述想看什么，SQL 由后端生成，用户不感知 SQL 的存在。
 export interface QueryRequest {
   dataset_key: string;
@@ -118,6 +142,7 @@ export interface QueryRequest {
   filter?: FilterNode;
   order_by: OrderBy[];
   limit: number;
+  compare?: CompareRequest;
 }
 
 export interface ResultColumn {
@@ -131,6 +156,7 @@ export interface QueryResult {
   row_count: number;
   elapsed_ms: number;
   truncated: boolean;
+  compare?: CompareMeta;
 }
 
 export interface UpdatePayload {
