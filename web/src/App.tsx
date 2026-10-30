@@ -16,12 +16,12 @@ import LabelList from './pages/LabelList';
 import LegacyPage from './pages/LegacyPage';
 import MigrationBoard from './pages/MigrationBoard';
 import QueryPage from './pages/QueryPage';
-import { fetchQueryDatasets } from './api';
-import type { QueryDataset } from './types';
+import { fetchDashboards, fetchQueryDatasets } from './api';
+import type { Dashboard, QueryDataset } from './types';
 import { readTenants, readVisibleUsers, subscribeTenants, writeTenants, writeVisibleUsers } from './identity';
 import type { Density } from './utils/prefs';
 import { setPrefs, usePrefs } from './utils/prefs';
-import { buildMenuGroups, collectEntries, entryMenuLabel } from './utils/entries';
+import { buildMenuGroups, collectAllEntries, entryMenuLabel } from './utils/entries';
 import { prefersLegacy, subscribeMigration } from './utils/migration';
 
 const OPERATOR_KEY = 'ds_operator';
@@ -75,12 +75,17 @@ export default function App() {
   // 菜单要按数据集上的入口配置渲染，所以这里也得知道有哪些数据集。
   // 租户一变可见数据集就变，菜单跟着变——看不到的数据集不该在菜单上留个空链接。
   const [datasets, setDatasets] = useState<QueryDataset[]>([]);
+  // 大盘也要进菜单：旧页面大多是大盘形态，那种页面只能由一张大盘来替代
+  const [dashboards, setDashboards] = useState<Dashboard[]>([]);
 
   useEffect(() => {
     const load = () => {
       fetchQueryDatasets()
         .then((res) => setDatasets(res.items ?? []))
         .catch(() => setDatasets([]));
+      fetchDashboards()
+        .then((res) => setDashboards(res.items ?? []))
+        .catch(() => setDashboards([]));
     };
     void load();
     return subscribeTenants(() => void load());
@@ -91,6 +96,9 @@ export default function App() {
     fetchQueryDatasets()
       .then((res) => setDatasets(res.items ?? []))
       .catch(() => setDatasets([]));
+    fetchDashboards()
+      .then((res) => setDashboards(res.items ?? []))
+      .catch(() => setDashboards([]));
   };
 
   // 用户在旧页面上的表态会影响菜单去向（比如他说了「以后再说」），所以要订阅
@@ -102,7 +110,7 @@ export default function App() {
   //   默认   只剩一条，点进去是新版（旧页仍可从新版里退回）
   //   替换   只剩一条，且名字已经变回原页面名——后缀是过渡期的标记，不该留一辈子
   const menuItems = useMemo(() => {
-    const groups = buildMenuGroups(collectEntries(datasets));
+    const groups = buildMenuGroups(collectAllEntries(datasets, dashboards));
     return [
       ...fixedMenuItems,
       ...groups.map((g) => ({
@@ -111,30 +119,30 @@ export default function App() {
         children: g.pages.flatMap<MenuItem>((slot) => {
           const e = slot.entries[0];
           if (slot.orphan) {
-            return [{ key: `/e/${e.key}`, label: e.title }];
+            return [{ key: e.href, label: e.title }];
           }
           if (!e) {
             return [{ key: `/legacy/${slot.page.key}`, label: slot.page.title }];
           }
           if (e.status === 'replaced') {
             // 名字变回原页面名：后缀是过渡期的标记，不该在菜单上挂一辈子
-            return [{ key: `/e/${e.key}`, label: slot.page.title }];
+            return [{ key: e.href, label: slot.page.title }];
           }
           if (e.status === 'default') {
             // 尊重个人选择：他说过以后再说，就还是进旧页
             return prefersLegacy(slot.page.key)
               ? [{ key: `/legacy/${slot.page.key}`, label: slot.page.title }]
-              : [{ key: `/e/${e.key}`, label: <MenuLabel text={slot.page.title} badge="新" /> }];
+              : [{ key: e.href, label: <MenuLabel text={slot.page.title} badge="新" /> }];
           }
           return [
             { key: `/legacy/${slot.page.key}`, label: slot.page.title },
-            { key: `/e/${e.key}`, label: entryMenuLabel(e) },
+            { key: e.href, label: entryMenuLabel(e) },
           ];
         }),
       })),
     ];
     // migrateVersion 不出现在计算里，但它是「用户改了表态」的信号，必须触发重算
-  }, [datasets, migrateVersion]);
+  }, [datasets, dashboards, migrateVersion]);
 
   // 系统不接鉴权，操作人由使用者自报并存在本地，随请求头 X-User 带给后端审计。
   const onOperatorChange = (value: string) => {
@@ -238,11 +246,14 @@ export default function App() {
             <Route path="/dashboards" element={<DashboardList />} />
             {/* 一张大盘：一屏多面板，面板各自是一次可视化查询 */}
             <Route path="/d/:dashKey" element={<DashboardPage />} />
-            <Route path="/migration" element={<MigrationBoard datasets={datasets} onReload={reloadDatasets} />} />
+            <Route
+              path="/migration"
+              element={<MigrationBoard datasets={datasets} dashboards={dashboards} onReload={reloadDatasets} />}
+            />
             {/* 挂在旧菜单下的入口：/e/{入口 key}，数据集与默认视图由入口配置决定 */}
             <Route path="/e/:entryKey" element={<EntryPage datasets={datasets} onReload={reloadDatasets} />} />
             {/* 存量页面：系统里那些写死的表格页 / 看板页 */}
-            <Route path="/legacy/:pageKey" element={<LegacyPage datasets={datasets} />} />
+            <Route path="/legacy/:pageKey" element={<LegacyPage datasets={datasets} dashboards={dashboards} />} />
             <Route path="*" element={<Navigate to="/datasets" replace />} />
           </Routes>
         </Layout.Content>

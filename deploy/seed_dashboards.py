@@ -42,6 +42,7 @@ COLLECT = {
     "title": "采集任务日报",
     "module": "数据采集",
     "legacy": "collect_daily",
+    "status": "default",  # 推进期：点旧菜单直接进这一屏，旧页仍可退回
     "owner": "数采组",
     "desc": "旧页的采集日报原样搬过来：上面四个数是当天规模，中间看趋势，下面是明细。口径与旧页一致，只是每块都能自己换维度。",
     "filters": [
@@ -80,6 +81,7 @@ QC = {
     "title": "质检日报",
     "module": "质量检验",
     "legacy": "qc_report",
+    "status": "replaced",  # 收敛完成：菜单名变回「质检日报」，旧链接进来给出口
     "owner": "质检组",
     "desc": "旧质检日报的大盘版：上面是当天抽检规模与缺陷，中间看通过率的走势，下面按批次下钻明细。",
     "filters": [
@@ -117,6 +119,7 @@ ANNO = {
     "title": "标注产能看板",
     "module": "数据标注",
     "legacy": "anno_capacity",
+    "status": "parallel",  # 观察期：旧页与新大盘并存，用户自己选
     "owner": "标注组",
     "desc": "旧产能看板的大盘版：上面是当天产出规模，中间看人均产能走势，下面是按人/按类型的明细。",
     "filters": [

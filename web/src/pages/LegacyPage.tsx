@@ -1,14 +1,15 @@
 import { useEffect } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Breadcrumb, Button, Card, Empty, Space, Table, Tag, Typography } from 'antd';
-import type { QueryDataset } from '../types';
+import type { Dashboard, QueryDataset } from '../types';
 import { findLegacyPage } from '../utils/legacyPages';
-import { collectEntries } from '../utils/entries';
+import { collectAllEntries } from '../utils/entries';
 import MigrationBanner from '../components/MigrationBanner';
 import { recordVisit } from '../utils/migration';
 
 interface Props {
   datasets: QueryDataset[];
+  dashboards?: Dashboard[];
 }
 
 // 存量页面：系统里那些写死的表格页 / 看板页。
@@ -16,10 +17,10 @@ interface Props {
 // 本仓库里没有真正的历史页面，这几个是照着「每天打开、表头固定、口径写死」
 // 的样子搭出来的替身，用来演示可视化查询要怎么接进去。真实接入时，
 // 迁移相关的部分（菜单挂载、迁移引导、状态机）都作用在你们自己的页面上。
-export default function LegacyPage({ datasets }: Props) {
+export default function LegacyPage({ datasets, dashboards = [] }: Props) {
   const { pageKey } = useParams();
   const page = findLegacyPage(pageKey);
-  const entries = collectEntries(datasets).filter((e) => e.legacy === pageKey);
+  const entries = collectAllEntries(datasets, dashboards).filter((e) => e.legacy === pageKey);
 
   // 记一次「旧页被打开」：这是迁移看板上「还有多少人在用旧页」的分子
   useEffect(() => {
@@ -56,9 +57,9 @@ export default function LegacyPage({ datasets }: Props) {
               <Typography.Text style={{ fontSize: 13 }}>
                 菜单里已经换成新版（同一份数据，可以自己换维度、加筛选）
               </Typography.Text>
-              <Link to={`/e/${entries[0].key}`}>
+              <Link to={entries[0].href}>
                 <Button type="primary" size="small">
-                  去可视化查询版
+                  {entries[0].kind === 'dashboard' ? '去新版大盘' : '去可视化查询版'}
                 </Button>
               </Link>
             </Space>
@@ -91,9 +92,9 @@ export default function LegacyPage({ datasets }: Props) {
         <Card size="small" style={{ marginTop: 12 }} title="这一页的迁移状态">
           {entries.map((e) => (
             <div key={e.key} style={{ fontSize: 13 }}>
-              <Link to={`/e/${e.key}`}>{e.title}（可视化查询版）</Link>
+              <Link to={e.href}>{e.title}（{e.kind === 'dashboard' ? '大盘版' : '可视化查询版'}）</Link>
               <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-                挂在数据集 {e.datasetKey}
+                {e.kind === 'dashboard' ? '一屏多面板，跨数据集' : `挂在数据集 ${e.datasetKey}`}
               </Typography.Text>
             </div>
           ))}

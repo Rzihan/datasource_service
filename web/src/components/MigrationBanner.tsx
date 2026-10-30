@@ -32,7 +32,7 @@ export default function MigrationBanner({ entry }: Props) {
   const goNew = () => {
     // 带上来处：新版那边要知道「这个人是从旧版过来的」，
     // 才好把对照关系说清楚，而不是默认他已经懂了。
-    navigate(`/e/${entry.key}?from=legacy`);
+    navigate(`${entry.href}?from=legacy`);
   };
 
   if (choice === 'never') return null;
@@ -41,7 +41,7 @@ export default function MigrationBanner({ entry }: Props) {
     return (
       <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          这一页有可视化查询版，可以自己换维度、加筛选
+          这一页有{entry.kind === 'dashboard' ? '新版大盘' : '可视化查询版'}，可以自己换维度、加筛选
         </Typography.Text>
         <Button type="link" size="small" onClick={goNew}>
           去看
@@ -58,11 +58,14 @@ export default function MigrationBanner({ entry }: Props) {
       type="info"
       showIcon
       style={{ marginBottom: 12 }}
-      message={`「${entry.legacyPage?.title ?? entry.title}」已有可视化查询版`}
+      message={`「${entry.legacyPage?.title ?? entry.title}」已有${entry.kind === 'dashboard' ? '新版大盘' : '可视化查询版'}`}
       description={
         <Space direction="vertical" size={6} style={{ width: '100%' }}>
           <Typography.Text style={{ fontSize: 13 }}>
-            {entry.note || '同一份数据，可以自己换维度、加筛选、看环比，不再受固定表头限制。'}
+            {entry.note ||
+              (entry.kind === 'dashboard'
+                ? '整屏一起收窄：上面指标、中间趋势、下面明细，跟旧页一个形状，但每块都能自己换维度。'
+                : '同一份数据，可以自己换维度、加筛选、看环比，不再受固定表头限制。')}
           </Typography.Text>
           <Space size={6}>
             <Button type="primary" size="small" onClick={goNew}>

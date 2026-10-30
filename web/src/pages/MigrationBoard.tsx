@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { App as AntApp, Button, Card, Progress, Select, Space, Table, Tag, Typography } from 'antd';
-import type { QueryDataset } from '../types';
-import { updateDatasetEntry } from '../api';
-import { collectEntries, statusText } from '../utils/entries';
+import type { Dashboard, QueryDataset } from '../types';
+import { updateDashboard, updateDatasetEntry } from '../api';
+import { collectAllEntries, statusText } from '../utils/entries';
 import { readVisits, subscribeMigration } from '../utils/migration';
 import type { EntryItem } from '../utils/entries';
 
 interface Props {
   datasets: QueryDataset[];
+  dashboards?: Dashboard[];
   onReload: () => void;
 }
 
@@ -16,9 +17,9 @@ interface Props {
 // 没有这个看板，迁移的进度只能靠感觉：要么一直并存着不敢动，
 // 要么某天一拍桌子把旧页删掉、然后被用户追着问。
 // 有了「新版 / 旧版各被打开了多少次」，下线与否变成一个能讨论的数字。
-export default function MigrationBoard({ datasets, onReload }: Props) {
+export default function MigrationBoard({ datasets, dashboards = [], onReload }: Props) {
   const { message } = AntApp.useApp();
-  const entries = useMemo(() => collectEntries(datasets), [datasets]);
+  const entries = useMemo(() => collectAllEntries(datasets, dashboards), [datasets, dashboards]);
   const [visits, setVisits] = useState(readVisits);
   const [busyKey, setBusyKey] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -41,7 +42,13 @@ export default function MigrationBoard({ datasets, onReload }: Props) {
   const setStatus = async (e: EntryItem, status: 'parallel' | 'default' | 'replaced') => {
     setBusyKey(e.key);
     try {
-      await updateDatasetEntry(e.datasetKey, { status });
+      // 大盘与查询入口共用同一套状态机，但写的地方不一样：
+      // 入口在数据集的 meta 里，大盘是一张独立的表（带乐观锁）
+      if (e.kind === 'dashboard') {
+        await updateDashboard(e.key, { status, version: e.version ?? 0 });
+      } else {
+        await updateDatasetEntry(e.datasetKey, { status });
+      }
       message.success(`「${e.legacyPage?.title ?? e.title}」→ ${statusText(status)}`);
       onReload();
     } catch (err) {
@@ -62,7 +69,11 @@ export default function MigrationBoard({ datasets, onReload }: Props) {
     setBulkBusy(true);
     try {
       for (const r of targets) {
-        await updateDatasetEntry(r.entry.datasetKey, { status: 'default' });
+        if (r.entry.kind === 'dashboard') {
+          await updateDashboard(r.entry.key, { status: 'default', version: r.entry.version ?? 0 });
+        } else {
+          await updateDatasetEntry(r.entry.datasetKey, { status: 'default' });
+        }
       }
       message.success(`${targets.length} 个入口已推进到「默认走新版」`);
       onReload();
@@ -116,7 +127,19 @@ export default function MigrationBoard({ datasets, onReload }: Props) {
               </Space>
             ),
           },
-          { title: '入口', dataIndex: ['entry', 'key'], render: (v: string) => <code>{v}</code> },
+          {
+            title: '入口',
+            dataIndex: ['entry', 'key'],
+            render: (v: string, r) => (
+              <Space size={4}>
+                <code>{v}</code>
+                {/* 大盘和单表是两种不同的迁移目标，看板上必须能分清 */}
+                <Tag color={r.entry.kind === 'dashboard' ? 'geekblue' : 'default'}>
+                  {r.entry.kind === 'dashboard' ? '大盘' : '单表'}
+                </Tag>
+              </Space>
+            ),
+          },
           {
             title: '新版 / 旧版',
             render: (_v, r) => (

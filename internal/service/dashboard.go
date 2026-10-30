@@ -90,6 +90,7 @@ func (s *DashboardService) Create(ctx context.Context, req *model.DashboardCreat
 		Desc:      strings.TrimSpace(req.Desc),
 		Owner:     strings.TrimSpace(req.Owner),
 		Legacy:    strings.TrimSpace(req.Legacy),
+		Status:    normalizeDashboardStatus(req.Status),
 		Panels:    normalizePanels(req.Panels),
 		Filters:   normalizeFilters(req.Filters),
 		Version:   0,
@@ -130,6 +131,9 @@ func (s *DashboardService) Update(ctx context.Context, key string, req *model.Da
 	}
 	if req.Legacy != nil {
 		patch["legacy"] = strings.TrimSpace(*req.Legacy)
+	}
+	if req.Status != nil {
+		patch["status"] = normalizeDashboardStatus(*req.Status)
 	}
 	// 切片没有「没传」和「传了空」的区别：空数组既可能是「清空所有面板」，
 	// 也可能是前端压根没带这个字段。这里按「带了就照做」处理，
@@ -174,6 +178,18 @@ func mustJSON(v interface{}) string {
 		return "[]"
 	}
 	return string(b)
+}
+
+// normalizeDashboardStatus 与入口共用同一套状态取值。
+// 拼错的那个字符串一律退回「并存」：宁可停在观察期，
+// 也不要因为一个 typo 把旧页直接下线。
+func normalizeDashboardStatus(in string) string {
+	switch strings.TrimSpace(in) {
+	case model.EntryStatusDefault, model.EntryStatusReplaced:
+		return strings.TrimSpace(in)
+	default:
+		return model.EntryStatusParallel
+	}
 }
 
 func normalizeDashboardKey(key string) (string, error) {
@@ -225,12 +241,12 @@ func normalizePanels(in []model.DashboardPanel) []model.DashboardPanel {
 			height = 260
 		}
 		out = append(out, model.DashboardPanel{
-			ID:      id,
-			Title:   strings.TrimSpace(p.Title),
-			Note:    strings.TrimSpace(p.Note),
-			Dataset: ds,
-			Query:   strings.TrimSpace(p.Query),
-			View:    view,
+			ID:         id,
+			Title:      strings.TrimSpace(p.Title),
+			Note:       strings.TrimSpace(p.Note),
+			Dataset:    ds,
+			Query:      strings.TrimSpace(p.Query),
+			View:       view,
 			Span:       span,
 			Height:     height,
 			Metric:     strings.TrimSpace(p.Metric),
@@ -276,4 +292,5 @@ func normalizePanelsInPlace(m *model.Dashboard) {
 	}
 	m.Panels = normalizePanels(m.Panels)
 	m.Filters = normalizeFilters(m.Filters)
+	m.Status = normalizeDashboardStatus(m.Status)
 }

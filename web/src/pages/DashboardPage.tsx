@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Alert, Breadcrumb, Button, Card, Col, Empty, Row, Select, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
 import { AppstoreOutlined, FilterOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { Dashboard, DashboardPanel, FilterNode, QueryDataset } from '../types';
 import { fetchDashboard, fetchDimValues, fetchQueryDatasets } from '../api';
 import DashboardPanelCard from '../components/DashboardPanelCard';
 import { panelQuery, parseIntent } from '../utils/intent';
+import { recordVisit } from '../utils/migration';
+import { findLegacyPage } from '../utils/legacyPages';
 
 // 一次「点图形下钻出来的整屏筛选」。它跟顶部声明的筛选器是两回事：
 // 声明的是作者钉好的常用维度，这个是看的人临时追问「这个柱子是谁」。
@@ -29,6 +31,10 @@ export default function DashboardPage() {
   // 整屏刷新：面板各自取数，但「我现在就要最新」是一个整屏动作，
   // 挨个面板点刷新等于让人重复做同一件事。
   const [reloadToken, setReloadToken] = useState(0);
+  // 从旧版点「立即体验」过来的：他此刻唯一的疑问是「这跟我原来那页是不是一回事」，
+  // 所以先把对照摆出来。跟入口页同一个约定，不同的是这里对照的是一整屏。
+  const [params] = useSearchParams();
+  const [fromLegacy] = useState(() => params.get('from') === 'legacy');
 
   // 顶部筛选器的当前值。key 是字段名而不是下标：
   // 作者增删筛选器时，已选的值不该跟着错位。
@@ -54,6 +60,12 @@ export default function DashboardPage() {
   useEffect(() => {
     void load();
   }, [load, reloadToken]);
+
+  // 记一次「新版被打开」：大盘也是迁移目标，不记的话看板会漏掉这一半，
+  // 于是「还有没有人在用旧页」变成一个偏小的数字——那会让人误判为迁移失败。
+  useEffect(() => {
+    if (dashboard?.legacy) recordVisit(dashboard.legacy, 'entry');
+  }, [dashboard]);
 
   // 筛选器的候选值从真实数据里取。手敲的候选值会跟数据脱节——
   // 新增了一个团队，下拉里却没有，筛选器就变成了「看起来能筛实际筛不到」。
@@ -138,6 +150,7 @@ export default function DashboardPage() {
     return <Alert type="error" showIcon message="这张大盘打不开" description={error || '不存在或已下线'} />;
   }
 
+  const legacyPage = findLegacyPage(dashboard?.legacy);
   const missing = dashboard.panels.filter((p) => !byKey.has(p.dataset)).map((p) => p.dataset);
   const filters = dashboard.filters ?? [];
   const followCount = dashboard.panels.filter((p) => p.follow !== false).length;
@@ -220,6 +233,25 @@ export default function DashboardPage() {
         </Card>
       )}
 
+      {fromLegacy && legacyPage && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`这一屏替代了旧页「${legacyPage.title}」`}
+          description={
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <Typography.Text style={{ fontSize: 13 }}>
+                旧页的表头是固定的（{legacyPage.columns.join('、')}）；这里每一块都能自己换维度，
+                并且可以用顶部筛选让整屏一起收窄。
+              </Typography.Text>
+              <Link to={`/legacy/${legacyPage.key}`}>
+                <Button size="small">回到旧版</Button>
+              </Link>
+            </Space>
+          }
+        />
+      )}
       {missing.length > 0 && (
         // 数据集失效是配置问题，不是数据问题。不点破的话，
         // 作者会以为是数仓挂了，然后去查一条根本不存在的线索。

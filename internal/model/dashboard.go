@@ -79,13 +79,17 @@ type DashboardPanelFilter struct {
 // 说明书里，等于规定「这屏东西属于那一张表」——既不对，也会在数据集
 // 改名/删除时跟着一起没。
 type Dashboard struct {
-	ID        uint64                 `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
-	Key       string                 `json:"key" gorm:"column:dashboard_key;type:varchar(64);not null"`
-	Title     string                 `json:"title" gorm:"column:title;type:varchar(128);not null"`
-	Module    string                 `json:"module" gorm:"column:module;type:varchar(64);not null;default:''"`
-	Desc      string                 `json:"desc" gorm:"column:descr;type:varchar(512);not null;default:''"`
-	Owner     string                 `json:"owner" gorm:"column:owner;type:varchar(64);not null;default:''"`
-	Legacy    string                 `json:"legacy" gorm:"column:legacy;type:varchar(64);not null;default:''"`
+	ID     uint64 `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	Key    string `json:"key" gorm:"column:dashboard_key;type:varchar(64);not null"`
+	Title  string `json:"title" gorm:"column:title;type:varchar(128);not null"`
+	Module string `json:"module" gorm:"column:module;type:varchar(64);not null;default:''"`
+	Desc   string `json:"desc" gorm:"column:descr;type:varchar(512);not null;default:''"`
+	Owner  string `json:"owner" gorm:"column:owner;type:varchar(64);not null;default:''"`
+	Legacy string `json:"legacy" gorm:"column:legacy;type:varchar(64);not null;default:''"`
+	// Status 迁移状态，取值与入口（DatasetEntry）完全一致：
+	// 大盘与查询入口是同一场迁移里的两种目标，状态机必须共用一套，
+	// 否则会出现「旧页已下线、但大盘还停在并存期」这种半吊子状态。
+	Status    string                 `json:"status" gorm:"column:status;type:varchar(16);not null;default:'parallel'"`
 	Panels    []DashboardPanel       `json:"panels" gorm:"column:panels;type:json;serializer:json;not null"`
 	Filters   []DashboardPanelFilter `json:"filters" gorm:"column:filters;type:json;serializer:json;not null"`
 	Version   int                    `json:"version" gorm:"column:version;type:int;not null;default:0"`
@@ -109,6 +113,7 @@ type DashboardCreateRequest struct {
 	Desc    string                 `json:"desc"`
 	Owner   string                 `json:"owner"`
 	Legacy  string                 `json:"legacy"`
+	Status  string                 `json:"status"`
 	Panels  []DashboardPanel       `json:"panels"`
 	Filters []DashboardPanelFilter `json:"filters"`
 }
@@ -123,6 +128,7 @@ type DashboardUpdateRequest struct {
 	Desc    *string                `json:"desc"`
 	Owner   *string                `json:"owner"`
 	Legacy  *string                `json:"legacy"`
+	Status  *string                `json:"status"`
 	Panels  []DashboardPanel       `json:"panels"`
 	Filters []DashboardPanelFilter `json:"filters"`
 	Version int                    `json:"version"`

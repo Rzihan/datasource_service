@@ -402,6 +402,8 @@ export interface Dashboard {
   desc?: string;
   owner?: string;
   legacy?: string;
+  // 迁移状态，与入口（DatasetEntry.status）共用一套取值
+  status?: 'parallel' | 'default' | 'replaced';
   panels: DashboardPanel[];
   filters?: DashboardFilter[];
   version: number;

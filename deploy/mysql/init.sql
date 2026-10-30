@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS `tb_dashboard` (
   `descr`         VARCHAR(512) NOT NULL DEFAULT '' COMMENT '这一屏在说什么',
   `owner`         VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '负责人',
   `legacy`        VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '替代的旧页面标识，用于迁移对照',
+  `status`        VARCHAR(16)  NOT NULL DEFAULT 'parallel' COMMENT '迁移状态：parallel/default/replaced，与入口共用一套',
   `panels`        JSON         NOT NULL COMMENT '面板列表：dataset + query + view + span + height',
   `filters`       JSON         NOT NULL COMMENT '大盘级筛选器声明',
   `version`       INT          NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
