@@ -89,7 +89,18 @@ interface QueryIntent {
 
 const MAX_LIMIT = 10000;
 
-export default function QueryPage() {
+// 入口页复用这一整屏，只是把数据集固定住：
+// 迁移场景里用户是从旧菜单点进来的，他要的是「原来那张表的可视化版」，
+// 不是再来一次「选数据集」。查询能力一点没少，少的只是那个他本来就不会动的入口。
+interface Props {
+  locked?: {
+    key: string;
+    // 说明这个数据集是哪来的，免得用户以为是被谁筛过
+    hint?: string;
+  };
+}
+
+export default function QueryPage({ locked }: Props = {}) {
   const { message } = App.useApp();
   // 界面档位是全局偏好：切到简洁档后，口径说明、推荐提示、预置分析都收起来
   const prefs = usePrefs();
@@ -97,7 +108,7 @@ export default function QueryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [datasets, setDatasets] = useState<QueryDataset[]>([]);
   const [loadingList, setLoadingList] = useState(false);
-  const [selectedKey, setSelectedKey] = useState<string>('');
+  const [selectedKey, setSelectedKey] = useState<string>(locked?.key ?? '');
   const [dims, setDims] = useState<string[]>([]);
   const [metrics, setMetrics] = useState<string[]>([]);
   const [filterTree, setFilterTree] = useState<FilterNode>(emptyRoot());
@@ -276,13 +287,21 @@ export default function QueryPage() {
       setDatasets(items);
       if (!restoredRef.current) {
         restoredRef.current = true;
-        applyUrlState(items);
+        // 入口页不从 URL 恢复数据集：数据集由入口配置决定，URL 里那一段
+        // 只描述「这一屏查了什么」，分享出去仍然能还原。
+        if (locked) {
+          if (items.some((d) => d.dataset_key === locked.key)) setSelectedKey(locked.key);
+        } else {
+          applyUrlState(items);
+        }
       }
     } catch (e) {
       message.error((e as Error).message || '加载数据集失败');
     } finally {
       setLoadingList(false);
     }
+    // locked 是入口页的固定数据集，读取一次即可，不该触发重新加载
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [message, applyUrlState]);
 
   useEffect(() => {
@@ -753,6 +772,8 @@ export default function QueryPage() {
               onReloadStats={() => loadStats(selectedKey)}
               onOpenPreset={openPreset}
               compact={compact}
+              locked={!!locked}
+              lockedHint={locked?.hint}
             />
           )}
         </Card>

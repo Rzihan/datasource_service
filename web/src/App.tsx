@@ -1,17 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { App as AntApp, Input, Layout, Menu, Segmented, Select, Space, Tooltip, Typography } from 'antd';
 import { AppstoreOutlined, BarChartOutlined, TagsOutlined } from '@ant-design/icons';
 import DatasetList from './pages/DatasetList';
+import EntryPage from './pages/EntryPage';
 import LabelList from './pages/LabelList';
+import LegacyPage from './pages/LegacyPage';
 import QueryPage from './pages/QueryPage';
-import { readTenants, readVisibleUsers, writeTenants, writeVisibleUsers } from './identity';
+import { fetchQueryDatasets } from './api';
+import type { QueryDataset } from './types';
+import { readTenants, readVisibleUsers, subscribeTenants, writeTenants, writeVisibleUsers } from './identity';
 import type { Density } from './utils/prefs';
 import { setPrefs, usePrefs } from './utils/prefs';
+import { buildMenuGroups, collectEntries, entryMenuLabel } from './utils/entries';
 
 const OPERATOR_KEY = 'ds_operator';
 
-const menuItems = [
+const fixedMenuItems = [
   { key: '/datasets', icon: <AppstoreOutlined />, label: '配置管理' },
   { key: '/labels', icon: <TagsOutlined />, label: '字段名称' },
   { key: '/query', icon: <BarChartOutlined />, label: '可视化查询' },
@@ -26,6 +31,41 @@ export default function App() {
   const [visibleUsers, setVisibleUsers] = useState<string[]>(readVisibleUsers);
   // 界面档位：全局偏好而不是页面内状态——切换后所有页面立刻生效，也不用每次重设
   const prefs = usePrefs();
+  // 菜单要按数据集上的入口配置渲染，所以这里也得知道有哪些数据集。
+  // 租户一变可见数据集就变，菜单跟着变——看不到的数据集不该在菜单上留个空链接。
+  const [datasets, setDatasets] = useState<QueryDataset[]>([]);
+
+  useEffect(() => {
+    const load = () => {
+      fetchQueryDatasets()
+        .then((res) => setDatasets(res.items ?? []))
+        .catch(() => setDatasets([]));
+    };
+    void load();
+    return subscribeTenants(() => void load());
+  }, []);
+
+  // 菜单项由入口动态生成：原来只有三个固定项，现在旧页面下面会长出「可视化查询版」。
+  // 没有配入口的数据集依旧只在查询页里出现，不进菜单——菜单不是数据集的目录。
+  const menuItems = useMemo(() => {
+    const groups = buildMenuGroups(collectEntries(datasets));
+    return [
+      ...fixedMenuItems,
+      ...groups.map((g) => ({
+        key: `module:${g.module}`,
+        label: g.module,
+        children: g.pages.flatMap((slot) => [
+          ...(slot.orphan
+            ? []
+            : [{ key: `/legacy/${slot.page.key}`, label: slot.page.title }]),
+          ...slot.entries.map((e) => ({
+            key: `/e/${e.key}`,
+            label: slot.orphan ? e.title : entryMenuLabel(e),
+          })),
+        ]),
+      })),
+    ];
+  }, [datasets]);
 
   // 系统不接鉴权，操作人由使用者自报并存在本地，随请求头 X-User 带给后端审计。
   const onOperatorChange = (value: string) => {
@@ -109,12 +149,14 @@ export default function App() {
         </Space>
       </Layout.Header>
       <Layout>
-        <Layout.Sider width={160} theme="light" style={{ borderRight: '1px solid #f0f0f0' }}>
+        <Layout.Sider width={208} theme="light" style={{ borderRight: '1px solid #f0f0f0' }}>
           <Menu
             mode="inline"
             selectedKeys={[location.pathname]}
             items={menuItems}
-            onClick={({ key }) => navigate(key)}
+            onClick={({ key }) => {
+              if (key.startsWith('/')) navigate(key);
+            }}
             style={{ borderInlineEnd: 'none', marginTop: 8 }}
           />
         </Layout.Sider>
@@ -124,6 +166,10 @@ export default function App() {
             <Route path="/datasets" element={<DatasetList />} />
             <Route path="/labels" element={<LabelList />} />
             <Route path="/query" element={<QueryPage />} />
+            {/* 挂在旧菜单下的入口：/e/{入口 key}，数据集与默认视图由入口配置决定 */}
+            <Route path="/e/:entryKey" element={<EntryPage datasets={datasets} />} />
+            {/* 存量页面：系统里那些写死的表格页 / 看板页 */}
+            <Route path="/legacy/:pageKey" element={<LegacyPage datasets={datasets} />} />
             <Route path="*" element={<Navigate to="/datasets" replace />} />
           </Routes>
         </Layout.Content>

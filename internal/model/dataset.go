@@ -111,6 +111,52 @@ type DatasetMeta struct {
 	// 作者不该靠「堆十条预置分析」表达意图——那只是把选择成本转嫁给用户。
 	// 指定一条默认，其余才是「可选项」。
 	DefaultExample string `json:"default_example,omitempty"`
+	// Entry 菜单挂载点：把这个数据集钉在某个存量页面的菜单位置上。
+	// 一个数据集最多挂一个入口——挂多个说明它本来就该拆成多个数据集。
+	Entry *DatasetEntry `json:"entry,omitempty"`
+}
+
+// 入口状态：一次迁移要能推进，也要能退回来。
+//
+// 只给「有新版 / 没新版」两种状态的话，上线只能一刀切：要么并存到天荒地老，
+// 要么某天把旧页删掉、出问题没法退回。三态把「并存观察 → 默认走新版 → 旧页下线」
+// 变成可逐步推进、也可随时退一步的开关，且它改的是配置不是代码。
+const (
+	// EntryStatusParallel 并存期：旧页照旧，菜单里多一个「可视化查询版」子项。
+	EntryStatusParallel = "parallel"
+	// EntryStatusDefault 默认走新版：点旧菜单直接进新版，旧页仍可通过地址访问。
+	EntryStatusDefault = "default"
+	// EntryStatusReplaced 旧页已下线：菜单里只剩新版。
+	EntryStatusReplaced = "replaced"
+)
+
+// DatasetEntry 一个「挂在旧菜单下面的可视化查询入口」。
+//
+// 存在的理由：历史用户要迁移的不是「查询能力」，而是「我原来那个页面」。
+// 只给一个可视化查询页让用户自己去找对应数据集，是把识别成本转嫁给他——
+// 他不知道新数据集叫什么，也不确定是不是自己原来那张表。
+// 所以入口挂在原菜单位置上，并且是「数据集 + 固定视图」的组合，
+// 打开就该是他熟悉的那张图。
+//
+// Key 是入口的唯一标识，进 URL（/e/{key}），只允许小写字母数字与短横线：
+// 菜单链接是要发给同事的，大小写混写的路径在复制到微信/企微时经常变形。
+type DatasetEntry struct {
+	Key  string `json:"key"`
+	Title string `json:"title,omitempty"`
+	// Module 所属模块（旧系统的一级菜单名），用于菜单分组。
+	Module string `json:"module,omitempty"`
+	// Legacy 它替代的存量页面标识。空 = 这个入口不替代任何旧页，只是独立菜单项。
+	Legacy string `json:"legacy,omitempty"`
+	// Status 迁移状态，见上面的三个常量。空 = 默认并存。
+	Status string `json:"status,omitempty"`
+	// Note 「这个入口和旧页有什么不一样」：换了什么口径、多了什么能力。
+	// 迁移最怕的是用户发现数对不上又没人解释，宁可先说清楚。
+	Note string `json:"note,omitempty"`
+	// DefaultQuery 入口自己的默认视图。优先于数据集的 default_example：
+	// 同一个数据集挂在两个旧页面下时，各自想看到的第一屏是不一样的。
+	DefaultQuery string `json:"default_query,omitempty"`
+	// Sort 同一菜单下的排序。
+	Sort int `json:"sort,omitempty"`
 }
 
 // MetaExample 一条预置分析。

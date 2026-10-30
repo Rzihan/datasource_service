@@ -39,6 +39,11 @@ interface Props {
   onOpenPreset?: (query: string) => void;
   // 简洁档：字段下拉只显示名字（搜索仍命中口径）、预置分析收起、体检卡压成一行
   compact?: boolean;
+  // 入口页锁定了数据集：这一屏的数据集由入口配置决定，不让改。
+  // 换成只读展示而不是禁用的下拉——禁用控件会让人以为「我改个权限就能改」，
+  // 而事实是这个页面本来就不是给你挑数据集用的。
+  locked?: boolean;
+  lockedHint?: string;
 }
 
 export default function QueryBuilder(props: Props) {
@@ -51,7 +56,7 @@ export default function QueryBuilder(props: Props) {
     dimValues, dimValueLoading, onRequestDimValues,
     onExecute, loading,
     compare, onCompareChange,
-    stats, statsLoading, onReloadStats, onOpenPreset, compact,
+    stats, statsLoading, onReloadStats, onOpenPreset, compact, locked, lockedHint,
   } = props;
   const { modal } = App.useApp();
 
@@ -228,16 +233,45 @@ export default function QueryBuilder(props: Props) {
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           数据集
         </Typography.Text>
-        <Select
-          style={{ width: '100%', marginTop: 4 }}
-          placeholder="选择数据集"
-          value={selected?.dataset_key}
-          onChange={onSelectDataset}
-          options={datasets.map((d) => ({
-            value: d.dataset_key,
-            label: `${d.dataset_key} · ${d.dataset_name}`,
-          }))}
-        />
+        {locked ? (
+          <div
+            style={{
+              marginTop: 4,
+              padding: '4px 11px',
+              border: '1px solid #f0f0f0',
+              borderRadius: 6,
+              background: '#fafafa',
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 8,
+            }}
+          >
+            <span>
+              {selected?.dataset_name ?? '—'}
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>
+                {selected?.dataset_key}
+              </Typography.Text>
+            </span>
+            <Tag color="blue">入口已固定</Tag>
+          </div>
+        ) : (
+          <Select
+            style={{ width: '100%', marginTop: 4 }}
+            placeholder="选择数据集"
+            value={selected?.dataset_key}
+            onChange={onSelectDataset}
+            options={datasets.map((d) => ({
+              value: d.dataset_key,
+              label: `${d.dataset_key} · ${d.dataset_name}`,
+            }))}
+          />
+        )}
+        {locked && lockedHint && (
+          <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+            {lockedHint}
+          </Typography.Text>
+        )}
         {/* 数据集的可信度：描述 + 行数 + 覆盖区间 + 负责人 + 更新频率。
             选完数据集立刻看到，不用先查一次才知道这数据能不能用。 */}
         <DatasetTrustCard

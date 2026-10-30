@@ -37,6 +37,29 @@ export interface MetaExample {
   query: string;
 }
 
+// 菜单入口：把这个数据集钉在某个存量页面的菜单位置上。
+//
+// 为什么需要它：历史用户要迁移的不是「查询能力」，而是「我原来那个页面」。
+// 只给一个可视化查询页、让他在几十个数据集里认出哪个是原来那张表，
+// 等于把识别成本转嫁给用户。入口挂在原位置，且是「数据集 + 固定视图」的组合。
+export interface DatasetEntry {
+  // 入口标识，进 URL（/e/{key}），只允许小写字母数字与短横线
+  key: string;
+  // 菜单标题，留空则用数据集名
+  title?: string;
+  // 所属模块（一级菜单名）
+  module?: string;
+  // 它替代的存量页面标识
+  legacy?: string;
+  // 迁移状态：parallel 并存 / default 默认走新版 / replaced 旧页已下线
+  status?: 'parallel' | 'default' | 'replaced';
+  // 与旧页的差异说明：换了什么口径、多了什么能力
+  note?: string;
+  // 入口自己的默认视图，优先于数据集的 default_example
+  default_query?: string;
+  sort?: number;
+}
+
 // 数据集说明书。不参与 SQL 生成，只影响「看不看得懂、敢不敢用」。
 export interface DatasetMeta {
   description?: string;
@@ -49,6 +72,8 @@ export interface DatasetMeta {
   // 作者的默认视图：某条 example 的 query。
   // 作者不该靠「堆十条预置」表达意图——那只是把选择成本转嫁给用户。
   default_example?: string;
+  // 菜单挂载点。一个数据集最多挂一个入口——挂多个说明它本来就该拆开。
+  entry?: DatasetEntry;
 }
 
 // 查询页看到的数据集：刻意不含 mid_sql（用户不感知 SQL）与 acl。
