@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
 import { ClearOutlined, SearchOutlined } from '@ant-design/icons';
 import type { CompareRequest, DatasetStats, FilterNode, OrderBy, QueryDataset } from '../types';
 import DatasetTrustCard from './DatasetTrustCard';
+import PresetAnalyses from './PresetAnalyses';
 import FilterTreeEditor from './FilterTreeEditor';
 import { countLeaves, emptyRoot, findRange, removeFields, stripRange, withRange } from '../utils/filterTree';
 
@@ -33,6 +34,8 @@ interface Props {
   stats?: DatasetStats | null;
   statsLoading?: boolean;
   onReloadStats?: () => void;
+  // 打开作者预置的分析（query 就是 URL 里 ds 之后的那一段）
+  onOpenPreset?: (query: string) => void;
 }
 
 export default function QueryBuilder(props: Props) {
@@ -45,7 +48,7 @@ export default function QueryBuilder(props: Props) {
     dimValues, dimValueLoading, onRequestDimValues,
     onExecute, loading,
     compare, onCompareChange,
-    stats, statsLoading, onReloadStats,
+    stats, statsLoading, onReloadStats, onOpenPreset,
   } = props;
   const { modal } = App.useApp();
 
@@ -219,6 +222,9 @@ export default function QueryBuilder(props: Props) {
           loading={statsLoading}
           onReload={onReloadStats}
         />
+        {/* 作者预置的分析：新人接手时的第一个问题是「从哪儿开始看」，
+            而这个问题数据集作者心里有答案，现在它是数据集的一部分。 */}
+        <PresetAnalyses examples={selected?.meta?.examples ?? []} onOpen={onOpenPreset ?? (() => {})} />
       </div>
 
       <div>

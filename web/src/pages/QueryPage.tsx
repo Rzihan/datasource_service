@@ -163,6 +163,57 @@ export default function QueryPage() {
     [message],
   );
 
+  // 把一段查询串解析成一次查询意图。URL 与「作者预置的分析」共用这一份解析：
+  // 预置存的就是 URL 里 ds 之后的那一段，只要链接能还原，预置就一定能还原，
+  // 不需要维护两套规则，也不会出现「链接能开、预置开不了」。
+  const parseIntent = (ds: QueryDataset, sp: URLSearchParams): QueryIntent => {
+    // 查询串可能来自别的环境 / 数据集改过字段，只保留当前数据集真实存在的字段
+    const parseList = (name: string, allowed: (f: string) => boolean) =>
+      (sp.get(name) ?? '').split(',').filter((v) => v && allowed(v));
+
+    const dims = parseList('dims', (f) => f in ds.dim_map || f in ds.multi_dim_map);
+    const metrics = parseList('metrics', (f) => f in ds.mtx_map);
+
+    let filter: FilterNode = emptyRoot();
+    const rawFilter = sp.get('filter');
+    if (rawFilter) {
+      try {
+        filter = JSON.parse(rawFilter) as FilterNode;
+      } catch {
+        filter = emptyRoot();
+      }
+    }
+    const orderField = sp.get('order') ?? '';
+    const order: OrderBy | null = orderField ? { field: orderField, desc: sp.get('dir') !== 'asc' } : null;
+    const parsedLimit = Number(sp.get('limit') ?? 1000) || 1000;
+    const safeLimit = Math.min(Math.max(parsedLimit, 1), MAX_LIMIT);
+    const cmpMode = sp.get('cmp');
+    const cmpField = sp.get('cmpf') ?? '';
+    const cmp: CompareRequest | null =
+      (cmpMode === 'prev_period' || cmpMode === 'prev_year') && cmpField in ds.dim_map
+        ? { mode: cmpMode, field: cmpField }
+        : null;
+    return { key: ds.dataset_key, dims, metrics, filterTree: filter, orderBy: order, limit: safeLimit, compare: cmp };
+  };
+
+  // 一次落全量状态再查：不能让用户「先选数据集、再看预置里少了什么」。
+  // 预置里带了 filter / 对比周期也一样，点一下就该是作者当时看到的那张图。
+  const applyIntent = (ds: QueryDataset, sp: URLSearchParams) => {
+    const it = parseIntent(ds, sp);
+    setSelectedKey(it.key);
+    setDims(it.dims);
+    setMetrics(it.metrics);
+    setFilterTree(it.filterTree);
+    setOrderBy(it.orderBy);
+    setLimit(it.limit);
+    setCompare(it.compare);
+    setDrills([]);
+    setError('');
+    if (it.dims.length > 0 || it.metrics.length > 0) {
+      void execute(it);
+    }
+  };
+
   // 从 URL 恢复：链接是「可交付物」，同事点开应该看到同一张图，
   // 而不是一个空白的查询构建器。
   const applyUrlState = useCallback(
@@ -171,46 +222,11 @@ export default function QueryPage() {
       const key = sp.get('ds') ?? '';
       const ds = items.find((d) => d.dataset_key === key);
       if (!ds) return;
-
-      // 链接可能来自别的环境/别人删过字段，只保留当前数据集真实存在的字段
-      const parseList = (name: string, allowed: (f: string) => boolean) =>
-        (sp.get(name) ?? '').split(',').filter((v) => v && allowed(v));
-
-      const dims = parseList('dims', (f) => f in ds.dim_map || f in ds.multi_dim_map);
-      const metrics = parseList('metrics', (f) => f in ds.mtx_map);
-
-      let filter: FilterNode = emptyRoot();
-      const rawFilter = sp.get('filter');
-      if (rawFilter) {
-        try {
-          filter = JSON.parse(rawFilter) as FilterNode;
-        } catch {
-          filter = emptyRoot();
-        }
-      }
-      const orderField = sp.get('order') ?? '';
-      const order: OrderBy | null = orderField ? { field: orderField, desc: sp.get('dir') !== 'asc' } : null;
-      const parsedLimit = Number(sp.get('limit') ?? 1000) || 1000;
-      const safeLimit = Math.min(Math.max(parsedLimit, 1), MAX_LIMIT);
-
-      setSelectedKey(key);
-      setDims(dims);
-      setMetrics(metrics);
-      setFilterTree(filter);
-      const cmpMode = sp.get('cmp');
-      const cmpField = sp.get('cmpf') ?? '';
-      const cmp: CompareRequest | null =
-        (cmpMode === 'prev_period' || cmpMode === 'prev_year') && cmpField in ds.dim_map
-          ? { mode: cmpMode, field: cmpField }
-          : null;
-
-      setOrderBy(order);
-      setLimit(safeLimit);
-      setCompare(cmp);
-      if (dims.length > 0 || metrics.length > 0) {
-        void execute({ key, dims, metrics, filterTree: filter, orderBy: order, limit: safeLimit, compare: cmp });
-      }
+      applyIntent(ds, sp);
     },
+    // applyIntent 每次渲染都是新的（它读的是当前状态），这里只依赖 execute：
+    // 恢复只发生在「首次加载完数据集」那一次，不需要精确依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [execute],
   );
 
@@ -452,6 +468,11 @@ export default function QueryPage() {
   // 收藏存的是「一屏查询的完整输入」，不是一条 URL。
   // 存输入的原因：数据集字段可能改名，打开时按当前字段重新校验一遍，
   // 比存一条会 404 的链接稳；而且收藏列表里要能显示「按什么维度、什么指标」。
+  const openPreset = (query: string) => {
+    if (!selected) return;
+    applyIntent(selected, new URLSearchParams(query));
+  };
+
   const currentSnapshot = () => ({
     datasetKey: selectedKey,
     dims,
@@ -606,6 +627,7 @@ export default function QueryPage() {
               stats={stats}
               statsLoading={statsLoading}
               onReloadStats={() => loadStats(selectedKey)}
+              onOpenPreset={openPreset}
             />
           )}
         </Card>
@@ -704,6 +726,11 @@ export default function QueryPage() {
             limit={limit}
             onLimitChange={setLimitAndQuery}
             onDrill={drillInto}
+            emptyHint={
+              (selected?.meta?.examples?.length ?? 0) > 0
+                ? `或直接从左侧「作者预置的分析」里挑一个（${selected?.meta?.examples?.length} 个）`
+                : undefined
+            }
             labelMap={selected?.label_map ?? {}}
             exportMeta={{
               dataset: selected ? `${selected.dataset_key} · ${selected.dataset_name}` : selectedKey,

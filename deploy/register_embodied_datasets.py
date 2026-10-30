@@ -160,6 +160,11 @@ META = {
                 "note": "按团队看人均产出，用于排班与激励",
                 "query": "dims=team,collector&metrics=episodes,per_person&limit=200",
             },
+            {
+                "title": "采集量周环比",
+                "note": "预置里也能带对比周期：直接给出「比上周同一天涨了多少」",
+                "query": "dims=date&metrics=episodes&cmp=prev_period&cmpf=date&limit=1000",
+            },
         ],
     },
     "robot_annotation": {

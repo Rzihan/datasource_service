@@ -87,6 +87,8 @@ interface Props {
   onLimitChange?: (limit: number) => void;
   // 下钻：点图上的一根柱子、或表格里一个维度值，把它加成等值条件重查
   onDrill?: (field: string, value: string) => void;
+  // 空态下的一句引导：数据集有预置分析时，比起「点查数」更值得先试那个
+  emptyHint?: string;
 }
 
 // 表头显示中文含义，原始字段名收进 Tooltip，方便对照 SQL 和下游对接
@@ -182,6 +184,7 @@ export default function ResultView({
   limit,
   onLimitChange,
   onDrill,
+  emptyHint,
 }: Props) {
   const { message } = App.useApp();
   // 默认落在表格：查数首先是要看到数，图只是可选的呈现方式。
@@ -719,7 +722,17 @@ export default function ResultView({
   };
 
   if (!result) {
-    return <Empty style={{ marginTop: 80 }} description="选择维度与指标后点击「查数」" />;
+    return (
+      <Empty
+        style={{ marginTop: 80 }}
+        description={
+          <span>
+            选择维度与指标后点击「查数」
+            {emptyHint && <div style={{ marginTop: 4, fontSize: 12 }}>{emptyHint}</div>}
+          </span>
+        }
+      />
+    );
   }
 
   // 上期整段没有数据（比如拿只覆盖 30 天的数据集做同比）：
