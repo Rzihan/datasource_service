@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { App as AntApp, Input, Layout, Menu, Select, Space, Typography } from 'antd';
+import { App as AntApp, Input, Layout, Menu, Segmented, Select, Space, Tooltip, Typography } from 'antd';
 import { AppstoreOutlined, BarChartOutlined, TagsOutlined } from '@ant-design/icons';
 import DatasetList from './pages/DatasetList';
 import LabelList from './pages/LabelList';
 import QueryPage from './pages/QueryPage';
 import { readTenants, readVisibleUsers, writeTenants, writeVisibleUsers } from './identity';
+import type { Density } from './utils/prefs';
+import { setPrefs, usePrefs } from './utils/prefs';
 
 const OPERATOR_KEY = 'ds_operator';
 
@@ -22,6 +24,8 @@ export default function App() {
   const [operator, setOperator] = useState(() => localStorage.getItem(OPERATOR_KEY) || 'system');
   const [tenants, setTenants] = useState<string[]>(readTenants);
   const [visibleUsers, setVisibleUsers] = useState<string[]>(readVisibleUsers);
+  // 界面档位：全局偏好而不是页面内状态——切换后所有页面立刻生效，也不用每次重设
+  const prefs = usePrefs();
 
   // 系统不接鉴权，操作人由使用者自报并存在本地，随请求头 X-User 带给后端审计。
   const onOperatorChange = (value: string) => {
@@ -59,7 +63,18 @@ export default function App() {
           Dataset 服务
         </Typography.Title>
         <Space size="small">
-          <Typography.Text type="secondary">登录态租户</Typography.Text>
+          <Tooltip title="简洁档收起口径说明、推荐提示、预置分析等引导性内容；完整档全部展开">
+            <Segmented
+              size="small"
+              value={prefs.density}
+              onChange={(v) => setPrefs({ density: v as Density })}
+              options={[
+                { label: '简洁', value: 'compact' },
+                { label: '完整', value: 'full' },
+              ]}
+            />
+          </Tooltip>
+          <Typography.Text type="secondary">租户</Typography.Text>
           <Select
             mode="tags"
             size="small"

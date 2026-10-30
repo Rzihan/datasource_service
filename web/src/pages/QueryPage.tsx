@@ -62,6 +62,7 @@ import {
   saveFavorite,
 } from '../utils/favorites';
 import { subscribeTenants } from '../identity';
+import { usePrefs } from '../utils/prefs';
 
 // 一次查询的完整输入。抽成对象是为了两件事：
 //   1. 从 URL 恢复时要拿「刚解析出来的值」直接查，不能等 setState 生效；
@@ -80,6 +81,9 @@ const MAX_LIMIT = 10000;
 
 export default function QueryPage() {
   const { message } = App.useApp();
+  // 界面档位是全局偏好：切到简洁档后，口径说明、推荐提示、预置分析都收起来
+  const prefs = usePrefs();
+  const compact = prefs.density === 'compact';
   const [searchParams, setSearchParams] = useSearchParams();
   const [datasets, setDatasets] = useState<QueryDataset[]>([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -628,6 +632,7 @@ export default function QueryPage() {
               statsLoading={statsLoading}
               onReloadStats={() => loadStats(selectedKey)}
               onOpenPreset={openPreset}
+              compact={compact}
             />
           )}
         </Card>
@@ -726,8 +731,9 @@ export default function QueryPage() {
             limit={limit}
             onLimitChange={setLimitAndQuery}
             onDrill={drillInto}
+            compact={compact}
             emptyHint={
-              (selected?.meta?.examples?.length ?? 0) > 0
+              !compact && (selected?.meta?.examples?.length ?? 0) > 0
                 ? `或直接从左侧「作者预置的分析」里挑一个（${selected?.meta?.examples?.length} 个）`
                 : undefined
             }

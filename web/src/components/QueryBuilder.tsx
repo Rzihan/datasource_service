@@ -36,6 +36,8 @@ interface Props {
   onReloadStats?: () => void;
   // 打开作者预置的分析（query 就是 URL 里 ds 之后的那一段）
   onOpenPreset?: (query: string) => void;
+  // 简洁档：字段下拉只显示名字（搜索仍命中口径）、预置分析收起、体检卡压成一行
+  compact?: boolean;
 }
 
 export default function QueryBuilder(props: Props) {
@@ -48,7 +50,7 @@ export default function QueryBuilder(props: Props) {
     dimValues, dimValueLoading, onRequestDimValues,
     onExecute, loading,
     compare, onCompareChange,
-    stats, statsLoading, onReloadStats, onOpenPreset,
+    stats, statsLoading, onReloadStats, onOpenPreset, compact,
   } = props;
   const { modal } = App.useApp();
 
@@ -81,7 +83,9 @@ export default function QueryBuilder(props: Props) {
     return (
       <div style={{ paddingBlock: 2 }}>
         <div>{option.label as React.ReactNode}</div>
-        {note && (
+        {/* 简洁档不显示口径说明这一行——但搜索仍然命中口径，
+            因为「记得说明、记不住字段名」这种搜索需求与档位无关 */}
+        {!compact && note && (
           <div style={{ fontSize: 12, color: '#8c8c8c', lineHeight: 1.4, whiteSpace: 'normal' }}>{note}</div>
         )}
       </div>
@@ -221,10 +225,15 @@ export default function QueryBuilder(props: Props) {
           stats={stats ?? null}
           loading={statsLoading}
           onReload={onReloadStats}
+          compact={compact}
         />
         {/* 作者预置的分析：新人接手时的第一个问题是「从哪儿开始看」，
             而这个问题数据集作者心里有答案，现在它是数据集的一部分。 */}
-        <PresetAnalyses examples={selected?.meta?.examples ?? []} onOpen={onOpenPreset ?? (() => {})} />
+        <PresetAnalyses
+          examples={selected?.meta?.examples ?? []}
+          onOpen={onOpenPreset ?? (() => {})}
+          compact={compact}
+        />
       </div>
 
       <div>

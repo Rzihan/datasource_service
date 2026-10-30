@@ -7,6 +7,9 @@ interface Props {
   stats: DatasetStats | null;
   loading?: boolean;
   onReload?: () => void;
+  // 简洁档：五格明细压成一行。老手每天看同一个数据集，
+  // 只需要「48 万行 · 覆盖到 10-30 · 王工」这一句，不需要五组标签。
+  compact?: boolean;
 }
 
 // 「多久更新一次」翻译成「最多能容忍多久没数据」。
@@ -27,7 +30,7 @@ function humanCount(n: number): string {
   return n.toLocaleString('zh-CN');
 }
 
-export default function DatasetTrustCard({ dataset, stats, loading, onReload }: Props) {
+export default function DatasetTrustCard({ dataset, stats, loading, onReload, compact }: Props) {
   if (!dataset) return null;
 
   const meta = dataset.meta ?? {};
@@ -81,7 +84,7 @@ export default function DatasetTrustCard({ dataset, stats, loading, onReload }: 
         ))}
       </Space>
 
-      {meta.description && (
+      {meta.description && !compact && (
         <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '0 0 8px' }}>
           {meta.description}
         </Typography.Paragraph>
@@ -89,6 +92,19 @@ export default function DatasetTrustCard({ dataset, stats, loading, onReload }: 
 
       {loading && !stats ? (
         <Skeleton active paragraph={{ rows: 2 }} title={false} />
+      ) : compact ? (
+        <div style={{ fontSize: 12, lineHeight: '20px' }}>
+          {stats?.error ? (
+            <Typography.Text type="secondary">规模扫描没跑出来</Typography.Text>
+          ) : (
+            <span>
+              {humanCount(stats?.row_count ?? 0)} 行
+              {stats?.max_date ? ` · 到 ${stats.max_date}（${stats.cover_days} 天）` : ''}
+              {` · 维度 ${fieldCount}${multiCount > 0 ? `+${multiCount} 多值` : ''} · 指标 ${mtxCount}`}
+              {meta.owner ? ` · ${meta.owner}` : ' · 负责人未填写'}
+            </span>
+          )}
+        </div>
       ) : (
         <div
           style={{

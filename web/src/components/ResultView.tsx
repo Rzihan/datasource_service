@@ -89,6 +89,9 @@ interface Props {
   onDrill?: (field: string, value: string) => void;
   // 空态下的一句引导：数据集有预置分析时，比起「点查数」更值得先试那个
   emptyHint?: string;
+  // 简洁档：收起所有「教你读图」的东西（推荐用哪种图、推荐角标、下钻提示、
+  // 分面与量级的解释）。这些都是给第一次看的人写的，熟练用户只会觉得吵。
+  compact?: boolean;
 }
 
 // 表头显示中文含义，原始字段名收进 Tooltip，方便对照 SQL 和下游对接
@@ -185,6 +188,7 @@ export default function ResultView({
   onLimitChange,
   onDrill,
   emptyHint,
+  compact,
 }: Props) {
   const { message } = App.useApp();
   // 默认落在表格：查数首先是要看到数，图只是可选的呈现方式。
@@ -759,7 +763,7 @@ export default function ResultView({
     >
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
         {KIND_LABEL[key]}
-        {recommendation?.type === key && (
+        {!compact && recommendation?.type === key && (
           <Tag color="success" style={{ marginInlineEnd: 0, borderRadius: 999, fontSize: 11, lineHeight: '16px' }}>
             推荐
           </Tag>
@@ -813,14 +817,14 @@ export default function ResultView({
               系列较多，堆叠更易看总量
             </Typography.Text>
           )}
-          {onDrill && resolvedX && (
+          {!compact && onDrill && resolvedX && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               点柱子 / 扇区可按该值下钻
             </Typography.Text>
           )}
         </Space>
 
-        {dimCols.length === 0 && (
+        {!compact && dimCols.length === 0 && (
           <Alert
             type="info"
             showIcon
@@ -828,7 +832,7 @@ export default function ResultView({
             message="本次查询没有选维度，横轴按「汇总」展示各指标的值"
           />
         )}
-        {!useFacet && facets.length > 1 && (
+        {!compact && !useFacet && facets.length > 1 && (
           <Alert
             type="info"
             showIcon
@@ -955,9 +959,10 @@ export default function ResultView({
         labelMap={labelMap}
         nonAdditive={nonAdditive}
         compare={result.compare}
+        compact={compact}
       />
 
-      {recommendation && !singleSummary && (
+      {!compact && recommendation && !singleSummary && (
         <Space size={6} style={{ marginBottom: 8 }} wrap>
           <BulbOutlined style={{ color: '#d48806' }} />
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>

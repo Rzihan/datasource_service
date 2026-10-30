@@ -18,6 +18,9 @@ interface Props {
   nonAdditive: string[];
   // 有对比周期时，卡片多一行「环比 +12.4%」——这是看板上最想先看到的那个数
   compare?: CompareMeta;
+  // 简洁档不画迷你趋势线：它只为「第一次看这张图」的人服务，
+  // 每天看的人要的是数字本身和更多横向空间。
+  compact?: boolean;
 }
 
 const MAX_CARDS = 4;
@@ -50,7 +53,7 @@ function Sparkline({ values }: { values: Array<number | null> }) {
   );
 }
 
-export default function MetricCards({ result, dims, metrics, labelMap, nonAdditive, compare }: Props) {
+export default function MetricCards({ result, dims, metrics, labelMap, nonAdditive, compare, compact }: Props) {
   const nonAdditiveSet = useMemo(() => new Set(nonAdditive), [nonAdditive]);
 
   // 时间列：X 轴是日期时，卡片上带一条迷你趋势
@@ -211,7 +214,7 @@ export default function MetricCards({ result, dims, metrics, labelMap, nonAdditi
                 {/* 数字太长、或卡片太窄时不给趋势线留位置：
                     被压成「1,440 …」的卡片失去意义，趋势线本来只是辅助。
                     四张卡并排时每张只有 150px，64px 的趋势线会把数字挤断。 */}
-                {c.spark && c.big.length <= 9 && cards.length <= 3 && (
+                {!compact && c.spark && c.big.length <= 9 && cards.length <= 3 && (
                   <div style={{ flexShrink: 0 }}>
                     <Sparkline values={c.spark} />
                   </div>
