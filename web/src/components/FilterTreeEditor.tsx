@@ -11,7 +11,9 @@ import { DeleteOutlined, PlusOutlined, PartitionOutlined } from '@ant-design/ico
 import type { FilterNode } from '../types';
 import { isGroup, MULTI_VALUE_OPS } from '../utils/filterTree';
 
-const OPS = ['=', '!=', '>', '>=', '<', '<=', 'like', 'in', 'not in'];
+// 为空 / 不为空：可空维度里的 NULL 是一类真实数据（未归因流量），
+// 不能筛掉也不能单独看，占比就会算错。
+const OPS = ['=', '!=', '>', '>=', '<', '<=', 'like', 'in', 'not in', 'is_null', 'is_not_null'];
 // 指标是聚合出来的数值，模糊匹配没有语义，后端也会直接拒绝
 const METRIC_OPS = ['=', '!=', '>', '>=', '<', '<=', 'in', 'not in'];
 
@@ -19,6 +21,8 @@ const METRIC_OPS = ['=', '!=', '>', '>=', '<', '<=', 'in', 'not in'];
 // 所以单独一套操作符，标签也直接写成人话。
 const MULTI_DIM_OPS = ['has', 'has_not', 'has_any', 'has_all'];
 const OP_LABEL: Record<string, string> = {
+  is_null: '为空',
+  is_not_null: '不为空',
   has: '包含',
   has_not: '不包含',
   has_any: '包含任一',
@@ -103,6 +107,8 @@ export default function FilterTreeEditor(props: Props) {
     const metric = isMetricField(field);
     const multiDim = isMultiDimField(field);
     const multi = MULTI_VALUE_OPS.includes(op);
+    // 空值判断没有右值，右侧不渲染输入框（渲染了也只是个摆设）
+    const noValue = op === 'is_null' || op === 'is_not_null';
     const ops = metric ? METRIC_OPS : multiDim ? MULTI_DIM_OPS : OPS;
     const values = dimValues[field] ?? [];
     const patch = (p: Partial<FilterNode>) => updateChild(index, { ...leaf, ...p });
@@ -138,7 +144,7 @@ export default function FilterTreeEditor(props: Props) {
             patch({ op: v, value: isMulti ? '' : leaf.value, values: isMulti ? leaf.values ?? [] : [] });
           }}
         />
-        {multi ? (
+        {noValue ? null : multi ? (
           <Select
             mode={metric ? 'tags' : 'multiple'}
             style={{ flex: '1 1 0', minWidth: 0 }}

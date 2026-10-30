@@ -21,13 +21,21 @@ const (
 	OpHasNot   = "has_not"
 	OpHasAny   = "has_any"
 	OpHasAll   = "has_all"
+	// 空值判断。可空维度里 NULL 是一类真实数据（未归因流量），
+	// 没有这两个操作符时用户既筛不掉它、也单独看不出来，做占比分母还含着它。
+	OpIsNull    = "is_null"
+	OpIsNotNull = "is_not_null"
 )
 
 var allowedOps = map[string]bool{
 	OpEq: true, OpNe: true, OpGt: true, OpGte: true, OpLt: true, OpLte: true,
 	OpLike: true, OpIn: true, OpNotIn: true,
 	OpHas: true, OpHasNot: true, OpHasAny: true, OpHasAll: true,
+	OpIsNull: true, OpIsNotNull: true,
 }
+
+// nullOps 不需要右值，编译成 IS NULL / IS NOT NULL。
+var nullOps = map[string]bool{OpIsNull: true, OpIsNotNull: true}
 
 // metricOps 是作用在指标（HAVING）上时允许的操作符。
 // 指标是聚合结果，绝大多数是数值，like 这类字符串匹配没有语义，

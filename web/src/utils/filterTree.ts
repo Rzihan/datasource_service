@@ -7,6 +7,11 @@ export const isGroup = (n: FilterNode): boolean => !!n.logic;
 // 多值维度的 has_any / has_all 也属于这一类，别只写 in / not in。
 export const MULTI_VALUE_OPS = ['in', 'not in', 'has_any', 'has_all'];
 
+// 不需要右值的操作符。它们必须被 leafFilled 认成「已填」——
+// 否则 pruneEmpty 会把用户刚加的空值条件当成「没填值」静默裁掉，
+// 界面看着筛了、实际查的是全量，比报错危险得多。
+export const NULL_OPS = ['is_null', 'is_not_null'];
+
 export const emptyRoot = (): FilterNode => ({ logic: 'and', children: [] });
 
 // 叶子是否填了值。没填值的条件既没意义，也会让后端报无意义的错。
@@ -15,6 +20,7 @@ export const emptyRoot = (): FilterNode => ({ logic: 'and', children: [] });
 // pruneEmpty 静默丢掉——用户以为筛了，实际看到的是全量数据。
 export const leafFilled = (n: FilterNode): boolean => {
   const op = n.op ?? '=';
+  if (NULL_OPS.includes(op)) return true;
   if (MULTI_VALUE_OPS.includes(op)) {
     return (n.values?.length ?? 0) > 0;
   }
@@ -59,6 +65,7 @@ export const countLeaves = (n: FilterNode | null): number => {
   if (!isGroup(n)) return 1;
   return (n.children ?? []).reduce((sum, c) => sum + countLeaves(c), 0);
 };
+
 // ---- 时间范围：前端只是两个 >= / <= 条件 ----
 //
 // 不引入新的后端算子，是因为区间本来就等于「>= 起 AND <= 止」。

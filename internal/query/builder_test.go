@@ -752,6 +752,7 @@ func TestBuildDimValuesSQL(t *testing.T) {
 		t.Fatalf("no row filter should produce no params, got %+v", params)
 	}
 }
+
 // 没给排序时也必须给出确定顺序：否则 LIMIT 10 拿到的是引擎先产出的 10 行，
 // 不是 Top10；同一查询两次执行顺序还可能不同。
 func TestBuildDefaultOrderWhenNoOrderBy(t *testing.T) {
@@ -802,3 +803,43 @@ func TestBuildExplicitOrderWins(t *testing.T) {
 }
 
 // 空值筛选：可空维度的 NULL 是一类真实数据，必须能单独筛出来 / 排除掉。
+func TestBuildIsNull(t *testing.T) {
+	spec := baseSpec()
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "city", Op: OpIsNull}}}
+	sql, params, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(sql, "WHERE city_code IS NULL") {
+		t.Errorf("sql missing IS NULL\n--- sql ---\n%s", sql)
+	}
+	if len(params) != 0 {
+		t.Errorf("IS NULL 不应产生参数: %+v", params)
+	}
+}
+
+func TestBuildIsNotNullOnGroupedDim(t *testing.T) {
+	spec := baseSpec()
+	spec.Dims = []string{"city"}
+	spec.Metrics = []string{"cost"}
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "city", Op: OpIsNotNull}}}
+	sql, _, err := Build(spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 能被下压的条件只出现在 WHERE（和 = / in 的处理一致），不重复生成 HAVING
+	if !strings.Contains(sql, "WHERE city_code IS NOT NULL") {
+		t.Errorf("sql missing IS NOT NULL in WHERE\n--- sql ---\n%s", sql)
+	}
+	if strings.Contains(sql, "HAVING") {
+		t.Errorf("纯维度条件不该产生 HAVING\n--- sql ---\n%s", sql)
+	}
+}
+
+func TestBuildIsNullRejectsMetric(t *testing.T) {
+	spec := baseSpec()
+	spec.Filter = &FilterNode{Logic: "and", Children: []FilterNode{{Field: "cost", Op: OpIsNull}}}
+	if _, _, err := Build(spec); err == nil {
+		t.Fatal("expect error when is_null applied to metric")
+	}
+}

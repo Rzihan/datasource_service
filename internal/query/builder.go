@@ -338,6 +338,24 @@ func (b *filterCompiler) compileLeaf(node FilterNode) (cond, error) {
 		}
 	}
 
+	// 空值判断：没有右值，不参与参数绑定。
+	// 只对普通维度开放——指标是聚合结果，聚合出来的 NULL 用 is_null 判断没有业务含义。
+	if nullOps[op] {
+		if dimExpr, ok := b.spec.DimMap[node.Field]; ok {
+			expr := qualifyMid(dimExpr, b.spec.Dims, b.spec.Metrics)
+			nullPart := "IS NULL"
+			if op == OpIsNotNull {
+				nullPart = "IS NOT NULL"
+			}
+			c := cond{where: fmt.Sprintf("%s %s", expr, nullPart)}
+			if contains(b.spec.Dims, node.Field) {
+				c.having = fmt.Sprintf("%s %s", quote(node.Field), nullPart)
+			}
+			return c, nil
+		}
+		return cond{}, fmt.Errorf("%w: 空值判断只支持普通维度字段，%q 不是", ErrInvalidQuery, node.Field)
+	}
+
 	// 维度是行级条件，永远可以下压到 WHERE；若它同时被选为分组键，
 	// 聚合后这一列还在，所以再给一份 HAVING 形态备用。
 	if dimExpr, ok := b.spec.DimMap[node.Field]; ok {
