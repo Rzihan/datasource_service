@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { Breadcrumb, Button, Card, Empty, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { useMemo, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Alert, Breadcrumb, Button, Card, Empty, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { ArrowLeftOutlined, AppstoreOutlined } from '@ant-design/icons';
 import QueryPage from './QueryPage';
 import type { QueryDataset } from '../types';
@@ -17,8 +17,15 @@ interface Props {
 // 查询能力照旧——少的只是那个他本来就不会动的入口。
 export default function EntryPage({ datasets }: Props) {
   const { entryKey } = useParams();
+  const [searchParams] = useSearchParams();
   const entries = useMemo(() => collectEntries(datasets), [datasets]);
   const entry = findEntry(entries, entryKey);
+  // 从旧版点「立即体验」过来的：他此刻唯一的疑问是「这跟我原来那张表是不是一回事」，
+  // 所以先把对照摆出来，而不是默认他看得懂。
+  //
+  // 只在首次渲染取一次：查询页会把状态单向写回 URL，而它只写自己认识的参数，
+  // 跟着 searchParams 走的话这条提示会在第一个查询完成后自己消失。
+  const [fromLegacy] = useState(() => searchParams.get('from') === 'legacy');
 
   if (datasets.length === 0) {
     return (
@@ -109,6 +116,27 @@ export default function EntryPage({ datasets }: Props) {
           </Typography.Paragraph>
         )}
       </div>
+      {fromLegacy && entry.legacyPage && (
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`你从「${entry.legacyPage.title}」过来，下面是同一份数据的可视化版`}
+          description={
+            <Space size={6} wrap style={{ marginTop: 4 }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                旧页固定表头：
+              </Typography.Text>
+              {entry.legacyPage.columns.map((c) => (
+                <Tag key={c}>{c}</Tag>
+              ))}
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                这些列在这里都能查到，并且可以按任意维度拆、加筛选、看环比。
+              </Typography.Text>
+            </Space>
+          }
+        />
+      )}
       <QueryPage
         locked={{
           key: entry.datasetKey,

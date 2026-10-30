@@ -3,6 +3,7 @@ import { Breadcrumb, Card, Empty, Table, Tag, Typography } from 'antd';
 import type { QueryDataset } from '../types';
 import { findLegacyPage } from '../utils/legacyPages';
 import { collectEntries } from '../utils/entries';
+import MigrationBanner from '../components/MigrationBanner';
 
 interface Props {
   datasets: QueryDataset[];
@@ -35,6 +36,9 @@ export default function LegacyPage({ datasets }: Props) {
         </Typography.Title>
         <Tag>存量页面</Tag>
       </div>
+      {/* 引导出现在他正在看的这一页上：迁移不能只靠菜单里多了一项，
+          用户每天的路径是肌肉记忆，他不会主动去看菜单多了什么。 */}
+      {entries[0] && <MigrationBanner entry={entries[0]} />}
       <Card size="small" title={page.title} extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>固定口径 · 不可改</Typography.Text>}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 0 }}>
           {page.desc}
