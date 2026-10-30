@@ -1,5 +1,5 @@
 import { Link, useParams } from 'react-router-dom';
-import { Breadcrumb, Card, Empty, Table, Tag, Typography } from 'antd';
+import { Alert, Breadcrumb, Button, Card, Empty, Space, Table, Tag, Typography } from 'antd';
 import type { QueryDataset } from '../types';
 import { findLegacyPage } from '../utils/legacyPages';
 import { collectEntries } from '../utils/entries';
@@ -36,9 +36,34 @@ export default function LegacyPage({ datasets }: Props) {
         </Typography.Title>
         <Tag>存量页面</Tag>
       </div>
-      {/* 引导出现在他正在看的这一页上：迁移不能只靠菜单里多了一项，
-          用户每天的路径是肌肉记忆，他不会主动去看菜单多了什么。 */}
-      {entries[0] && <MigrationBanner entry={entries[0]} />}
+      {/* 旧页已被替代：菜单上已经没有这一页了，能走到这里的多半是从旧链接/收藏进来的，
+          所以要说清楚去哪儿，而不是让他看到一张还能用的表、以为一切照旧。 */}
+      {entries[0]?.status === 'replaced' ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="这一页已由可视化查询版替代"
+          description={
+            <Space size={6}>
+              <Typography.Text style={{ fontSize: 13 }}>
+                菜单里已经换成新版（同一份数据，可以自己换维度、加筛选）
+              </Typography.Text>
+              <Link to={`/e/${entries[0].key}`}>
+                <Button type="primary" size="small">
+                  去可视化查询版
+                </Button>
+              </Link>
+            </Space>
+          }
+        />
+      ) : (
+        <>
+          {/* 引导出现在他正在看的这一页上：迁移不能只靠菜单里多了一项，
+              用户每天的路径是肌肉记忆，他不会主动去看菜单多了什么。 */}
+          {entries[0] && <MigrationBanner entry={entries[0]} />}
+        </>
+      )}
       <Card size="small" title={page.title} extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>固定口径 · 不可改</Typography.Text>}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 0 }}>
           {page.desc}

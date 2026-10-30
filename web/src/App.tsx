@@ -13,8 +13,38 @@ import { readTenants, readVisibleUsers, subscribeTenants, writeTenants, writeVis
 import type { Density } from './utils/prefs';
 import { setPrefs, usePrefs } from './utils/prefs';
 import { buildMenuGroups, collectEntries, entryMenuLabel } from './utils/entries';
+import { prefersLegacy, subscribeMigration } from './utils/migration';
 
 const OPERATOR_KEY = 'ds_operator';
+
+interface MenuItem {
+  key: string;
+  label: React.ReactNode;
+}
+
+// 菜单项上的角标。用自绘的一小块而不是 antd Tag：菜单项内部再套组件
+// 会把行高撑开，一排菜单看着参差不齐。
+function MenuLabel({ text, badge }: { text: string; badge?: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span>{text}</span>
+      {badge && (
+        <span
+          style={{
+            fontSize: 11,
+            color: '#fff',
+            background: '#1677ff',
+            borderRadius: 4,
+            padding: '0 4px',
+            lineHeight: '16px',
+          }}
+        >
+          {badge}
+        </span>
+      )}
+    </span>
+  );
+}
 
 const fixedMenuItems = [
   { key: '/datasets', icon: <AppstoreOutlined />, label: '配置管理' },
@@ -45,8 +75,14 @@ export default function App() {
     return subscribeTenants(() => void load());
   }, []);
 
-  // 菜单项由入口动态生成：原来只有三个固定项，现在旧页面下面会长出「可视化查询版」。
-  // 没有配入口的数据集依旧只在查询页里出现，不进菜单——菜单不是数据集的目录。
+  // 用户在旧页面上的表态会影响菜单去向（比如他说了「以后再说」），所以要订阅
+  const [migrateVersion, setMigrateVersion] = useState(0);
+  useEffect(() => subscribeMigration(() => setMigrateVersion((v) => v + 1)), []);
+
+  // 菜单项由入口动态生成。同一个菜单会长成三种样子，取决于迁移状态：
+  //   并存   旧页 + 「（可视化查询版）」两条都在
+  //   默认   只剩一条，点进去是新版（旧页仍可从新版里退回）
+  //   替换   只剩一条，且名字已经变回原页面名——后缀是过渡期的标记，不该留一辈子
   const menuItems = useMemo(() => {
     const groups = buildMenuGroups(collectEntries(datasets));
     return [
@@ -54,18 +90,33 @@ export default function App() {
       ...groups.map((g) => ({
         key: `module:${g.module}`,
         label: g.module,
-        children: g.pages.flatMap((slot) => [
-          ...(slot.orphan
-            ? []
-            : [{ key: `/legacy/${slot.page.key}`, label: slot.page.title }]),
-          ...slot.entries.map((e) => ({
-            key: `/e/${e.key}`,
-            label: slot.orphan ? e.title : entryMenuLabel(e),
-          })),
-        ]),
+        children: g.pages.flatMap<MenuItem>((slot) => {
+          const e = slot.entries[0];
+          if (slot.orphan) {
+            return [{ key: `/e/${e.key}`, label: e.title }];
+          }
+          if (!e) {
+            return [{ key: `/legacy/${slot.page.key}`, label: slot.page.title }];
+          }
+          if (e.status === 'replaced') {
+            // 名字变回原页面名：后缀是过渡期的标记，不该在菜单上挂一辈子
+            return [{ key: `/e/${e.key}`, label: slot.page.title }];
+          }
+          if (e.status === 'default') {
+            // 尊重个人选择：他说过以后再说，就还是进旧页
+            return prefersLegacy(slot.page.key)
+              ? [{ key: `/legacy/${slot.page.key}`, label: slot.page.title }]
+              : [{ key: `/e/${e.key}`, label: <MenuLabel text={slot.page.title} badge="新" /> }];
+          }
+          return [
+            { key: `/legacy/${slot.page.key}`, label: slot.page.title },
+            { key: `/e/${e.key}`, label: entryMenuLabel(e) },
+          ];
+        }),
       })),
     ];
-  }, [datasets]);
+    // migrateVersion 不出现在计算里，但它是「用户改了表态」的信号，必须触发重算
+  }, [datasets, migrateVersion]);
 
   // 系统不接鉴权，操作人由使用者自报并存在本地，随请求头 X-User 带给后端审计。
   const onOperatorChange = (value: string) => {

@@ -26,6 +26,7 @@ import type {
   RowRule,
   StringMap,
 } from '../types';
+import { LEGACY_PAGES } from '../utils/legacyPages';
 
 // 自检失败发生在哪一步，直接翻译成人话
 const STAGE_LABEL: Record<string, string> = {
@@ -100,6 +101,17 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
   const [metaTags, setMetaTags] = useState<string[]>([]);
   const [metaNotes, setMetaNotes] = useState<StringMap>({});
   const [metaDefault, setMetaDefault] = useState('');
+  // 菜单入口（meta.entry）：把这个数据集挂到某个存量页面的菜单位置上。
+  // 单独一个开关而不是「填了就算有」：入口会真的在菜单上长出来，
+  // 半填的状态（只有 key 没有 legacy）比没有更让人困惑。
+  const [entryOn, setEntryOn] = useState(false);
+  const [entryKey, setEntryKey] = useState('');
+  const [entryTitle, setEntryTitle] = useState('');
+  const [entryModule, setEntryModule] = useState('');
+  const [entryLegacy, setEntryLegacy] = useState('');
+  const [entryStatus, setEntryStatus] = useState<'parallel' | 'default' | 'replaced'>('parallel');
+  const [entryNote, setEntryNote] = useState('');
+  const [entryQuery, setEntryQuery] = useState('');
 
   // 自检用的是「当前表单里的内容」而不是已保存的配置，所以新建时也能先验证再保存
   const onDryRun = async () => {
@@ -162,6 +174,15 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setMetaTags(meta.tags ?? []);
       setMetaNotes(meta.field_notes ?? {});
       setMetaDefault(meta.default_example ?? '');
+      const e = meta.entry;
+      setEntryOn(!!e?.key);
+      setEntryKey(e?.key ?? '');
+      setEntryTitle(e?.title ?? '');
+      setEntryModule(e?.module ?? '');
+      setEntryLegacy(e?.legacy ?? '');
+      setEntryStatus(e?.status ?? 'parallel');
+      setEntryNote(e?.note ?? '');
+      setEntryQuery(e?.default_query ?? '');
     } else {
       setKey('');
       setName('');
@@ -178,6 +199,14 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
       setMetaTags([]);
       setMetaNotes({});
       setMetaDefault('');
+      setEntryOn(false);
+      setEntryKey('');
+      setEntryTitle('');
+      setEntryModule('');
+      setEntryLegacy('');
+      setEntryStatus('parallel');
+      setEntryNote('');
+      setEntryQuery('');
     }
   }, [open, record]);
 
@@ -262,6 +291,20 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
     // 默认视图必须指向仍存在的 example，否则等于没配
     if (metaDefault && out.examples?.some((ex) => ex.query === metaDefault)) {
       out.default_example = metaDefault;
+    }
+    // 入口只在开关打开且填了 key 时才写：后端会把「key 不合法」的入口整个丢掉，
+    // 前端也别提交一个半截的——菜单上会真的多出一项，比没有更糟。
+    if (entryOn && entryKey.trim()) {
+      const legacy = entryLegacy || undefined;
+      out.entry = {
+        key: entryKey.trim().toLowerCase(),
+        title: entryTitle.trim() || undefined,
+        module: entryModule.trim() || undefined,
+        legacy,
+        status: entryStatus,
+        note: entryNote.trim() || undefined,
+        default_query: entryQuery.trim() || undefined,
+      };
     }
     return out;
   };
@@ -746,6 +789,111 @@ export default function EditDrawer({ open, record, onClose, onSaved }: Props) {
                     }))}
                   />
                 </div>
+              </div>
+            ),
+          },
+          {
+            key: 'entry',
+            label: (
+              <Space size={6}>
+                <span>菜单入口</span>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  挂到旧页面菜单下 · 迁移状态
+                </Typography.Text>
+              </Space>
+            ),
+            children: (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <Space size={8} align="center">
+                  <Switch checked={entryOn} onChange={setEntryOn} />
+                  <Typography.Text style={{ fontSize: 13 }}>
+                    把这个数据集挂到菜单上
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    （只在查询页出现 = 关；挂到旧页面下面 = 开）
+                  </Typography.Text>
+                </Space>
+                {entryOn && (
+                  <>
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        入口标识：只能用小写字母、数字、短横线，出现在地址 /e/
+                        <span style={{ fontFamily: 'monospace' }}>{entryKey || 'xxx'}</span>
+                      </Typography.Text>
+                      <Input
+                        value={entryKey}
+                        onChange={(e) => setEntryKey(e.target.value)}
+                        placeholder="例如 collect-daily"
+                        style={{ marginTop: 4 }}
+                      />
+                    </div>
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        替代哪个存量页面（选了就挂在它的菜单下面）
+                      </Typography.Text>
+                      <Select
+                        style={{ width: '100%', marginTop: 4 }}
+                        allowClear
+                        placeholder="不替代任何旧页（独立菜单项）"
+                        value={entryLegacy || undefined}
+                        onChange={(v) => setEntryLegacy(v ?? '')}
+                        options={LEGACY_PAGES.map((p) => ({
+                          value: p.key,
+                          label: `${p.module} / ${p.title}`,
+                        }))}
+                      />
+                    </div>
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        菜单标题（留空用数据集名）
+                      </Typography.Text>
+                      <Input
+                        value={entryTitle}
+                        onChange={(e) => setEntryTitle(e.target.value)}
+                        placeholder="例如 采集任务日报"
+                        style={{ marginTop: 4 }}
+                      />
+                    </div>
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        迁移状态
+                      </Typography.Text>
+                      <Select
+                        style={{ width: '100%', marginTop: 4 }}
+                        value={entryStatus}
+                        onChange={setEntryStatus}
+                        options={[
+                          { value: 'parallel', label: '并存：旧页与新版都在菜单上' },
+                          { value: 'default', label: '默认走新版：点旧菜单进新版，仍可退回' },
+                          { value: 'replaced', label: '旧页下线：菜单上只剩新版' },
+                        ]}
+                      />
+                    </div>
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        与旧页的差异（会显示在入口页与迁移提示里）
+                      </Typography.Text>
+                      <Input.TextArea
+                        value={entryNote}
+                        rows={2}
+                        maxLength={200}
+                        onChange={(e) => setEntryNote(e.target.value)}
+                        placeholder="例如：同一份明细，可以按任意维度拆、加筛选、看环比"
+                      />
+                    </div>
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        入口默认视图（URL 里 ds= 之后那一段；去查询页调好一张图后复制过来）
+                      </Typography.Text>
+                      <Input
+                        value={entryQuery}
+                        onChange={(e) => setEntryQuery(e.target.value)}
+                        placeholder="例如 dims=date,team&metrics=episodes"
+                        style={{ marginTop: 4, fontFamily: 'monospace', fontSize: 12 }}
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             ),
           },
