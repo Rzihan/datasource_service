@@ -43,6 +43,9 @@ services:
     volumes:
       - ch-data:/var/lib/clickhouse
       - ./deploy/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # 具身智能那套表（约 165 万行）。文件名要排在 init.sql 之前：
+      # 初始化脚本按文件名字序执行，它建完库，init.sql 里的授权才授权得到。
+      - ./deploy/clickhouse/embodied.sql:/docker-entrypoint-initdb.d/embodied.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'clickhouse-client --query "SELECT 1" >/dev/null 2>&1 || exit 1']
       interval: 5s
