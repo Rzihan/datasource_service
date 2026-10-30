@@ -6,6 +6,7 @@ import {
   Button,
   Empty,
   Modal,
+  Segmented,
   Skeleton,
   Space,
   Table,
@@ -19,6 +20,7 @@ import type { ChartPoint, ChartType } from './ChartView';
 import { buildShape, recommend } from '../utils/chartRecommend';
 import type { ChartKind } from '../utils/chartRecommend';
 import { toNumber } from '../utils/number';
+import { columnDigits, formatNumber, formatScaled, numericText, parseScaled, sumColumn } from '../utils/format';
 import type { QueryResult, StringMap } from '../types';
 
 // 保持原有导出面：数值判定已挪到 utils/number，图表和推荐规则共用同一套。
@@ -67,10 +69,18 @@ function columnTitle(name: string, labelMap: StringMap) {
   );
 }
 
-// 单元格渲染：Decimal 在后端已转成字符串保精度，这里原样展示，不做数值转换。
-function renderCell(value: unknown) {
+// 单元格渲染：指标列按数值格式化（千分位 + 列内统一小数位），维度列原样展示。
+// Decimal 在后端已转成字符串保精度，格式化也走字符串/定点，不经过 float。
+function renderCell(value: unknown, numeric: boolean, digits: number) {
   if (value === null || value === undefined) {
     return <Typography.Text type="secondary">NULL</Typography.Text>;
+  }
+  if (numeric) {
+    const text = formatNumber(value, digits);
+    if (text !== null) {
+      // tabular-nums：等宽数字，纵向扫一列时位数才对得齐
+      return <span style={{ fontVariantNumeric: 'tabular-nums' }}>{text}</span>;
+    }
   }
   if (typeof value === 'object') {
     return JSON.stringify(value);
@@ -92,16 +102,23 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
   const chartBoxRef = useRef<HTMLDivElement>(null);
   const fullBoxRef = useRef<HTMLDivElement>(null);
 
-  const columns = useMemo(() => {
+  // 每列是不是数值、小数位保留几位，都按「这一列的值」定，不按字段类型猜：
+  // 指标列也可能返回非数值（配置写错时），那时退回原样显示，不静默变成 0。
+  const columnMeta = useMemo(() => {
     if (!result) return [];
-    return result.columns.map((c, i) => ({
-      title: columnTitle(c.name, labelMap),
+    return result.columns.map((c, i) => {
+      const values = result.rows.map((r) => r[i]);
+      const isMetric = metrics.includes(c.name);
+      const numeric = isMetric && values.some((v) => numericText(v) !== null);
+      return { name: c.name, numeric, digits: numeric ? columnDigits(values) : 0 };
+    });
+  }, [result, metrics]);
+
       dataIndex: `c${i}`,
       key: `c${i}`,
       ellipsis: true,
       render: (v: unknown) => renderCell(v),
     }));
-  }, [result, labelMap]);
 
   const dataSource = useMemo(() => {
     if (!result) return [];
@@ -113,6 +130,40 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
       return obj;
     });
   }, [result]);
+  }, [columnMeta, labelMap, compareAt]);
+
+  // 合计行：只对当前返回的全部行求和（不是当前分页），有分组才显示。
+  // 两个局限写进 tooltip 而不是藏着：截断时只是部分合计；去重类指标逐行相加会重复计数。
+  const summaryRow = useMemo(() => {
+    if (!result || result.rows.length < 2) return null;
+    if (!columnMeta.some((m) => m.numeric)) return null;
+    const sumNote = [
+      `对当前返回的 ${result.rows.length} 行求和`,
+      result.truncated ? '（结果已截断，这只是部分合计）' : '',
+      '去重类指标（如 UV）逐行相加会重复计数，比值类指标相加无意义',
+    ].join('；');
+    return (
+      <Table.Summary fixed>
+        <Table.Summary.Row>
+          {columnMeta.map((m, i) => (
+            <Table.Summary.Cell key={i} index={i} align={m.numeric ? 'right' : 'left'}>
+              {i === 0 ? (
+                <Tooltip title={sumNote}>
+                  <Typography.Text strong style={{ cursor: 'help' }}>
+                    合计
+                  </Typography.Text>
+                </Tooltip>
+              ) : m.numeric ? (
+                <Typography.Text strong style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {formatScaled(sumColumn(result.rows.map((r) => r[i]), m.digits), m.digits)}
+                </Typography.Text>
+              ) : null}
+            </Table.Summary.Cell>
+          ))}
+        </Table.Summary.Row>
+      </Table.Summary>
+    );
+  }, [result, columnMeta]);
 
   const colNames = useMemo(() => (result?.columns ?? []).map((c) => c.name), [result]);
 
@@ -194,6 +245,7 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
         xCount={xCount}
         xLabel={resolvedX ? labelMap[resolvedX] || resolvedX : '汇总'}
         yLabel={series.length === 1 ? series[0] : undefined}
+        stacked={type === 'column' && stackActive}
       />
     </div>
   );
@@ -213,6 +265,15 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     a.download = `query-result-${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const addDerived = (name: string, expr: string) => {
+    try {
+      const node = parseExpression(expr, new Set(colNames));
+      setDerived((prev) => [...prev, { name, expr, node }]);
+    } catch {
+      // 弹窗里已经校验过，这里兜底不弹二次错误
+    }
   };
 
   const downloadPng = () => {
@@ -345,6 +406,7 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
                 columns={columns}
                 dataSource={dataSource}
                 scroll={{ x: 'max-content' }}
+                summary={() => summaryRow}
                 pagination={{
                   defaultPageSize: 20,
                   showSizeChanger: true,
