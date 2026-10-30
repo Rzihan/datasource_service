@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   App,
-  Alert,
   Button,
   Card,
   Col,
@@ -28,6 +27,7 @@ import {
 import QueryBuilder from '../components/QueryBuilder';
 import ResultView from '../components/ResultView';
 import FavoritesDrawer from '../components/FavoritesDrawer';
+import DiagnosisPanel from '../components/DiagnosisPanel';
 import { executeQuery, fetchDimValues, fetchQueryDatasets } from '../api';
 import type { CompareRequest, FilterNode, OrderBy, QueryDataset, QueryResult } from '../types';
 import {
@@ -38,8 +38,11 @@ import {
   hasCondition,
   pruneEmpty,
   removeCondition,
+  removeLeafByText,
 } from '../utils/filterTree';
 import { isAdditiveMetric } from '../utils/format';
+import type { FixAction } from '../utils/diagnose';
+import { diagnoseEmpty, diagnoseError } from '../utils/diagnose';
 import type { HistoryEntry } from '../utils/queryHistory';
 import { clearHistory, historyTime, loadHistory, pushHistory } from '../utils/queryHistory';
 import type { FavoriteEntry } from '../utils/favorites';
@@ -362,6 +365,53 @@ export default function QueryPage() {
     });
   };
 
+  // 诊断面板给出的「一键修复」：每一条都对应一个具体的状态改动 + 立刻重查，
+  // 不给「知道了」这种关掉就消失的按钮——那等于把问题还给用户。
+  const applyFix = (action: FixAction) => {
+    if (!selectedKey) return;
+    const run = (patch: Partial<Pick<QueryIntent, 'dims' | 'metrics' | 'filterTree' | 'limit'>>) => {
+      const next = { dims, metrics, filterTree, orderBy, limit, ...patch };
+      void execute({
+        key: selectedKey,
+        dims: next.dims,
+        metrics: next.metrics,
+        filterTree: next.filterTree,
+        orderBy,
+        limit: next.limit,
+        compare,
+      });
+    };
+    switch (action.kind) {
+      case 'clearFilter':
+        setFilterTree(emptyRoot());
+        setDrills([]);
+        run({ filterTree: emptyRoot() });
+        break;
+      case 'dropFilter': {
+        const next = removeLeafByText(pruneEmpty(filterTree), action.field, action.value) ?? emptyRoot();
+        setFilterTree(next);
+        setDrills((prev) => prev.filter((d) => !(d.field === action.field && d.value === action.value)));
+        run({ filterTree: next });
+        break;
+      }
+      case 'lowerLimit':
+        setLimit(action.limit);
+        run({ limit: action.limit });
+        break;
+      case 'clearDims':
+        setDims([]);
+        run({ dims: [] });
+        break;
+      case 'clearMetrics':
+        setMetrics([]);
+        run({ metrics: [] });
+        break;
+      case 'reloadDatasets':
+        void loadDatasets();
+        break;
+    }
+  };
+
   const labelOf = (datasetKey: string) => (field: string) => {
     const ds = datasets.find((d) => d.dataset_key === datasetKey);
     return ds?.label_map?.[field] || field;
@@ -529,13 +579,41 @@ export default function QueryPage() {
       <Col xs={24} md={15} lg={16}>
         <Card size="small" title="查询结果">
           {error && (
-            <Alert
-              type="error"
-              showIcon
-              style={{ marginBottom: 12 }}
-              message="查询失败"
-              description={error}
-            />
+            <div style={{ marginBottom: 12 }}>
+              <DiagnosisPanel
+                tone="error"
+                busy={querying}
+                diagnosis={diagnoseError(error, {
+                  dataset: selected,
+                  dims,
+                  metrics,
+                  filterTree,
+                  labelOf: labelOf(selectedKey),
+                  limit,
+                })}
+                onFix={applyFix}
+              />
+            </div>
+          )}
+          {/* 0 行不是「没有结果」，是「有一个原因」。表格里一句「暂无数据」
+              把问题原样还给用户，这里改成诊断 + 一键放宽。 */}
+          {!error && result && result.rows.length === 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <DiagnosisPanel
+                tone="empty"
+                busy={querying}
+                diagnosis={diagnoseEmpty({
+                  dataset: selected,
+                  dims,
+                  metrics,
+                  filterTree,
+                  labelOf: labelOf(selectedKey),
+                  limit,
+                  elapsedMs: result.elapsed_ms,
+                })}
+                onFix={applyFix}
+              />
+            </div>
           )}
           {drillPath.length > 0 && (
             <Space size={6} wrap style={{ marginBottom: 10 }}>
@@ -582,6 +660,8 @@ export default function QueryPage() {
               </Button>
             </Space>
           )}
+          {/* 0 行时只留上面的诊断：再摆一张空表和 0 值指标卡，只是把同一句话抄三遍 */}
+          {!(result && result.rows.length === 0) && (
           <ResultView
             result={result}
             dims={dims}
@@ -602,6 +682,7 @@ export default function QueryPage() {
               limit,
             }}
           />
+          )}
         </Card>
       </Col>
 

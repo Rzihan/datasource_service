@@ -185,6 +185,21 @@ export function removeCondition(n: FilterNode | null, field: string, value: stri
   return kids.length > 0 ? { ...n, children: kids } : null;
 }
 
+// 按「字段 + 值的展示文本」去掉一条条件。
+// 诊断面板知道用户看到的是哪一行文字，但不知道它在树里的位置，
+// 所以按内容匹配而不是按索引——索引会在用户改了别的条件后错位。
+export function removeLeafByText(n: FilterNode | null, field: string, text: string): FilterNode | null {
+  if (!n) return null;
+  if (!isGroup(n)) {
+    const val = Array.isArray(n.values) && n.values.length > 0 ? n.values.join('、') : (n.value ?? '');
+    return n.field === field && val === text ? null : n;
+  }
+  const kids = (n.children ?? [])
+    .map((c) => removeLeafByText(c, field, text))
+    .filter((c): c is FilterNode => c !== null);
+  return kids.length > 0 ? { ...n, children: kids } : null;
+}
+
 export function hasCondition(n: FilterNode | null, field: string, value: string): boolean {
   return collectLeaves(n).some(
     (l) => l.field === field && (l.op ?? '=') === '=' && (l.value ?? '') === value,
