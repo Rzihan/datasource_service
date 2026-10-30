@@ -138,16 +138,7 @@ func Build(spec Spec) (string, []Param, error) {
 		orderParts = append(orderParts, fmt.Sprintf("%s %s", quote(o.Field), dir))
 	}
 
-	limit := spec.Limit
-	if limit <= 0 {
-		limit = spec.DefaultLimit
-	}
-	if spec.MaxLimit > 0 && limit > spec.MaxLimit {
-		limit = spec.MaxLimit
-	}
-	if limit <= 0 {
-		limit = 1000
-	}
+	limit := EffectiveLimit(spec)
 
 	// 没有显式排序时也要给出一个确定的顺序，两个理由：
 	//  1. LIMIT 的正确性——把「返回行数」改成 10 想看 Top10，没有 ORDER BY 时
@@ -187,8 +178,33 @@ func Build(spec Spec) (string, []Param, error) {
 		sb.WriteString("\nORDER BY ")
 		sb.WriteString(strings.Join(orderParts, ", "))
 	}
-	sb.WriteString(fmt.Sprintf("\nLIMIT %d", limit))
+	// 多取一行作为「后面还有」的证据。
+	// 只按行数是否等于上限去判断，永远分不清「刚好这么多」和「被截断了」——
+	// 而这两件事在汇报场景里差别极大（一个是全量，一个是部分）。
+	// 多出来的那一行由上层丢弃，不会出现在结果里。
+	probe := limit + 1
+	if spec.MaxLimit > 0 && probe > spec.MaxLimit {
+		probe = spec.MaxLimit + 1
+	}
+	sb.WriteString(fmt.Sprintf("\nLIMIT %d", probe))
 	return sb.String(), params, nil
+}
+
+// EffectiveLimit 把请求里的 limit 收敛到 [1, MaxLimit]。
+// 生成 SQL 与判定截断必须用同一份上限，否则会出现「界面写 5000、后端按 10000 判断」
+// 这类对不上的情况。
+func EffectiveLimit(spec Spec) int {
+	limit := spec.Limit
+	if limit <= 0 {
+		limit = spec.DefaultLimit
+	}
+	if spec.MaxLimit > 0 && limit > spec.MaxLimit {
+		limit = spec.MaxLimit
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	return limit
 }
 
 // qualifyMid 在「表达式可能被 SELECT 别名遮蔽」时，给它加上子查询结果的前缀。

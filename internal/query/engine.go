@@ -39,8 +39,8 @@ func NewClickHouse(cfg config.CHConfig, maxRows int) (*ClickHouse, error) {
 		Settings: clickhouse.Settings{
 			// context 取消不一定能立刻杀掉 CH 端的查询，所以服务端也要有超时
 			"max_execution_time": cfg.QueryTimeoutSeconds,
-			// 结果集过大时先在这里挡一道
-			"max_result_rows": maxRows,
+			// 结果集过大时先在这里挡一道；比 maxRows 多留一行给截断探针
+			"max_result_rows": maxRows + 1,
 		},
 	})
 	if err != nil {
@@ -74,7 +74,9 @@ func (c *ClickHouse) Query(ctx context.Context, sqlText string, params []Param) 
 
 	res := &ExecuteResult{Columns: columns, Rows: make([][]any, 0)}
 	for rows.Next() {
-		if res.RowCount >= c.maxRows {
+		// 允许比 maxRows 多读一行：上层要靠这一行判断「是不是还有更多」。
+		// 它只被计数、不进结果集，所以不会让响应变大。
+		if len(res.Rows) > c.maxRows {
 			res.Truncated = true
 			break
 		}

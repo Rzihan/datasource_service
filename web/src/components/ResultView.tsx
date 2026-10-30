@@ -25,6 +25,7 @@ import { columnDigits, formatNumber, formatScaled, numericText, parseScaled, sum
 import type { ExprNode } from '../utils/expr';
 import { evalExpression, parseExpression } from '../utils/expr';
 import DerivedColumnModal from './DerivedColumnModal';
+import ResultSummaryBar from './ResultSummaryBar';
 import type { QueryResult, StringMap } from '../types';
 
 // 保持原有导出面：数值判定已挪到 utils/number，图表和推荐规则共用同一套。
@@ -78,6 +79,9 @@ interface Props {
   // 不能逐行相加的指标（比率 / 均值 / 去重类）。合计行对它们显示「—」，
   // 否则有效率会加出 1622% 这种一眼错的数——比不显示更糟。
   nonAdditive?: string[];
+  // 返回上限与放宽入口：「已截断」如果不给解法，只是让用户对着不全的数据继续分析
+  limit: number;
+  onLimitChange?: (limit: number) => void;
 }
 
 // 表头显示中文含义，原始字段名收进 Tooltip，方便对照 SQL 和下游对接
@@ -116,7 +120,16 @@ function csvCell(v: unknown): string {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export default function ResultView({ result, dims, metrics, labelMap, exportMeta, nonAdditive = [] }: Props) {
+export default function ResultView({
+  result,
+  dims,
+  metrics,
+  labelMap,
+  exportMeta,
+  nonAdditive = [],
+  limit,
+  onLimitChange,
+}: Props) {
   const { message } = App.useApp();
   // 默认落在表格：查数首先是要看到数，图只是可选的呈现方式。
   const [tab, setTab] = useState<TabKey>('table');
@@ -597,24 +610,25 @@ export default function ResultView({ result, dims, metrics, labelMap, exportMeta
 
   return (
     <div>
-      <Space style={{ marginBottom: 12, justifyContent: 'space-between', display: 'flex' }} wrap>
-        <Space wrap>
-          <Typography.Text type="secondary">
-            共 {result.row_count} 行 · 耗时 {result.elapsed_ms} ms
-          </Typography.Text>
-          {result.truncated && <Tag color="warning">结果已截断至上限</Tag>}
-        </Space>
-        <Space size={8}>
-          <Tooltip title="用已有列做四则运算，生成 CPC 之类的比率指标">
-            <Button size="small" icon={<FunctionOutlined />} onClick={() => setDerivedOpen(true)}>
-              计算列
+      <ResultSummaryBar
+        result={result}
+        limit={limit}
+        labelMap={labelMap}
+        nonAdditive={nonAdditive}
+        onLimitChange={onLimitChange}
+        actions={
+          <Space size={8}>
+            <Tooltip title="用已有列做四则运算，生成 CPC 之类的比率指标">
+              <Button size="small" icon={<FunctionOutlined />} onClick={() => setDerivedOpen(true)}>
+                计算列
+              </Button>
+            </Tooltip>
+            <Button size="small" icon={<DownloadOutlined />} onClick={downloadCSV}>
+              下载 CSV
             </Button>
-          </Tooltip>
-          <Button size="small" icon={<DownloadOutlined />} onClick={downloadCSV}>
-            下载 CSV
-          </Button>
-        </Space>
-      </Space>
+          </Space>
+        }
+      />
 
       {recommendation && (
         <Space size={6} style={{ marginBottom: 8 }} wrap>

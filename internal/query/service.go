@@ -404,6 +404,20 @@ func (s *Service) Execute(ctx context.Context, req *ExecuteRequest, operator str
 	}
 
 	res.ElapsedMs = elapsed
+
+	// SQL 里多取了一行做「还有更多」的探针，这里把它丢掉并标出截断。
+	// 用户在界面上看到的行数必须与「是不是全量」这个结论一致：
+	// 显示 50 行、却不说后面还有 890 行，是最容易让人拿着部分数据去汇报的坑。
+	if eff := EffectiveLimit(Spec{
+		Limit:        req.Limit,
+		MaxLimit:     s.cfg.MaxResultRows,
+		DefaultLimit: s.cfg.DefaultLimit,
+	}); res.RowCount > eff {
+		res.Truncated = true
+		res.Rows = res.Rows[:eff]
+		res.RowCount = eff
+	}
+
 	// 成功也把 SQL 打出来：日常排查「这个数是怎么算出来的」主要靠这条日志，
 	// 行级权限注入的条件也只在这里能看到全貌。
 	slog.Info("query executed",

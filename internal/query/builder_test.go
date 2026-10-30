@@ -2,6 +2,7 @@ package query
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,7 @@ func TestBuildBasic(t *testing.T) {
 		"WHERE city_code = {p0:String}",
 		"GROUP BY stat_date",
 		"ORDER BY `cost` DESC",
-		"LIMIT 100",
+		"LIMIT 101", // 100 + 1 探针
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("sql missing %q\n--- sql ---\n%s", want, sql)
@@ -85,7 +86,7 @@ func TestBuildLimitClamped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.HasSuffix(sql, "LIMIT 10000") {
+	if !strings.HasSuffix(sql, "LIMIT 10001") { // 上限 10000 + 1 探针
 		t.Fatalf("limit not clamped:\n%s", sql)
 	}
 }
@@ -97,7 +98,7 @@ func TestBuildDefaultLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.HasSuffix(sql, "LIMIT 1000") {
+	if !strings.HasSuffix(sql, "LIMIT 1001") { // 默认 1000 + 1 探针
 		t.Fatalf("default limit not applied:\n%s", sql)
 	}
 }
@@ -765,7 +766,7 @@ func TestBuildDefaultOrderWhenNoOrderBy(t *testing.T) {
 	if want := "ORDER BY `cost` DESC, `date` ASC"; !strings.Contains(sql, want) {
 		t.Errorf("sql missing default order %q\n--- sql ---\n%s", want, sql)
 	}
-	if !strings.Contains(sql, "LIMIT 10") {
+	if !strings.Contains(sql, "LIMIT 11") {
 		t.Errorf("sql missing limit\n--- sql ---\n%s", sql)
 	}
 }
@@ -842,4 +843,50 @@ func TestBuildIsNullRejectsMetric(t *testing.T) {
 	if _, _, err := Build(spec); err == nil {
 		t.Fatal("expect error when is_null applied to metric")
 	}
+}
+
+// 截断探针：SQL 必须多取一行，否则「刚好 N 行」和「被截断了」永远分不清。
+// 这一行不会进结果，只用来判断后面还有没有。
+func TestBuildLimitProbe(t *testing.T) {
+	cases := []struct {
+		name     string
+		limit    int
+		maxLimit int
+		defLimit int
+		want     string
+	}{
+		{name: "普通上限", limit: 50, maxLimit: 10000, defLimit: 1000, want: "LIMIT 51"},
+		{name: "未指定走默认", limit: 0, maxLimit: 10000, defLimit: 1000, want: "LIMIT 1001"},
+		{name: "超过硬顶按硬顶+1", limit: 999999, maxLimit: 10000, defLimit: 1000, want: "LIMIT 10001"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			spec := baseSpec()
+			spec.Limit = c.limit
+			spec.MaxLimit = c.maxLimit
+			spec.DefaultLimit = c.defLimit
+			sql, _, err := Build(spec)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !strings.HasSuffix(sql, c.want) {
+				t.Fatalf("want %q, got:\n%s", c.want, sql)
+			}
+			// 判定截断用的是同一个收敛后的上限
+			eff := EffectiveLimit(spec)
+			if eff+1 != mustNumber(t, c.want) {
+				t.Fatalf("EffectiveLimit=%d 与 SQL %q 不一致", eff, c.want)
+			}
+		})
+	}
+}
+
+// mustNumber 从 "LIMIT 51" 里取出 51
+func mustNumber(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(strings.TrimPrefix(s, "LIMIT "))
+	if err != nil {
+		t.Fatalf("解析 %q 失败: %v", s, err)
+	}
+	return n
 }

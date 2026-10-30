@@ -240,6 +240,14 @@ export default function QueryPage() {
     void execute({ key: selectedKey, dims, metrics, filterTree, orderBy, limit });
   };
 
+  // 从结果页放宽返回上限：点了「放宽到 5000」就得带着新上限重查一次，
+  // 否则按钮只是把左边输入框改了，用户还得自己再点一次查数。
+  const setLimitAndQuery = (next: number) => {
+    setLimit(next);
+    if (!selectedKey) return;
+    void execute({ key: selectedKey, dims, metrics, filterTree, orderBy, limit: next });
+  };
+
   // 历史回填：一次性替换全部条件再查，而不是让用户自己回忆当时筛了什么
   const restoreHistory = (entry: HistoryEntry) => {
     const ds = datasets.find((d) => d.dataset_key === entry.datasetKey);
@@ -350,6 +358,8 @@ export default function QueryPage() {
             dims={dims}
             metrics={metrics}
             nonAdditive={metrics.filter((m) => !isAdditiveMetric(selected?.mtx_map?.[m]))}
+            limit={limit}
+            onLimitChange={setLimitAndQuery}
             labelMap={selected?.label_map ?? {}}
             exportMeta={{
               dataset: selected ? `${selected.dataset_key} · ${selected.dataset_name}` : selectedKey,
