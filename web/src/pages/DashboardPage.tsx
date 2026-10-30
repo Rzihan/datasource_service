@@ -1,10 +1,35 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Alert, Breadcrumb, Button, Card, Col, Empty, Row, Select, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
-import { AppstoreOutlined, FilterOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  Alert,
+  App as AntApp,
+  Breadcrumb,
+  Button,
+  Card,
+  Col,
+  Empty,
+  Row,
+  Select,
+  Skeleton,
+  Space,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd';
+import {
+  AppstoreOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  FilterOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+  UndoOutlined,
+} from '@ant-design/icons';
 import type { Dashboard, DashboardPanel, FilterNode, QueryDataset } from '../types';
-import { fetchDashboard, fetchDimValues, fetchQueryDatasets } from '../api';
+import { fetchDashboard, fetchDimValues, fetchQueryDatasets, updateDashboard } from '../api';
 import DashboardPanelCard from '../components/DashboardPanelCard';
+import PanelEditor from '../components/PanelEditor';
 import { panelQuery, parseIntent } from '../utils/intent';
 import { recordVisit } from '../utils/migration';
 import { findLegacyPage } from '../utils/legacyPages';
@@ -42,6 +67,17 @@ export default function DashboardPage() {
   const [crossFilters, setCrossFilters] = useState<CrossFilter[]>([]);
   const [options, setOptions] = useState<Record<string, string[]>>({});
 
+  // ── 编辑态 ──────────────────────────────────────────────────────
+  // 草稿先落在本地，点保存才写库。直接改库的话，拖错一次宽度就得靠撤销接口救，
+  // 而「撤销改动」对作者的心理成本远低于「再改回去再保存」。
+  const { message } = AntApp.useApp();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<DashboardPanel[] | null>(null);
+  const [editingPanel, setEditingPanel] = useState<DashboardPanel | null>(null);
+  const [saving, setSaving] = useState(false);
+  const panels = draft ?? dashboard?.panels ?? [];
+  const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(dashboard?.panels ?? []);
+
   const load = useCallback(() => {
     setLoading(true);
     setError('');
@@ -49,6 +85,7 @@ export default function DashboardPage() {
       .then(([d, ds]) => {
         setDashboard(d);
         setDatasets(ds.items ?? []);
+        setDraft(null);
       })
       .catch((e: unknown) => {
         setDashboard(null);
@@ -139,6 +176,46 @@ export default function DashboardPage() {
     setCrossFilters((prev) => [...prev.filter((c) => c.field !== field), { field, value: x, from: panel.title || panel.id }]);
   };
 
+  const save = async () => {
+    if (!dashboard || !draft) return;
+    setSaving(true);
+    try {
+      const updated = await updateDashboard(dashboard.key, { panels: draft, version: dashboard.version });
+      setDashboard(updated);
+      setDraft(null);
+      setEditing(false);
+      message.success('已保存');
+    } catch (e) {
+      // 版本冲突是最常见的一种，单独说一句：光弹「保存失败」，作者会以为网络坏了
+      const msg = (e as Error).message || '保存失败';
+      message.error(msg.includes('刷新') || msg.includes('冲突') ? `${msg}（别人刚改过这张大盘）` : msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addPanel = () => {
+    const ds = datasets[0];
+    if (!ds) return;
+    const metrics = Object.keys(ds.mtx_map);
+    const sp = new URLSearchParams();
+    if (metrics.length > 0) sp.set('metrics', metrics[0]);
+    sp.set('limit', '200');
+    setDraft([
+      ...panels,
+      {
+        id: `p${Date.now()}`,
+        title: '',
+        dataset: ds.dataset_key,
+        query: sp.toString(),
+        view: 'table',
+        span: 6,
+        height: 280,
+      },
+    ]);
+    setEditing(true);
+  };
+
   if (loading && !dashboard) {
     return (
       <Card>
@@ -164,10 +241,43 @@ export default function DashboardPage() {
         <Typography.Title level={5} style={{ margin: 0 }}>
           {dashboard.title}
         </Typography.Title>
-        <Tag color="geekblue">{dashboard.panels.length} 个面板</Tag>
+        <Tag color="geekblue">{panels.length} 个面板</Tag>
+        {dirty && <Tag color="orange">未保存</Tag>}
         {dashboard.owner && <Tag>负责人：{dashboard.owner}</Tag>}
         <div style={{ flex: 1 }} />
         <Space size={4}>
+          {editing ? (
+            <>
+              <Button size="small" icon={<PlusOutlined />} onClick={addPanel}>
+                加面板
+              </Button>
+              <Button
+                size="small"
+                icon={<UndoOutlined />}
+                disabled={!dirty}
+                onClick={() => {
+                  setDraft(null);
+                  setEditing(false);
+                }}
+              >
+                撤销改动
+              </Button>
+              <Button
+                size="small"
+                type="primary"
+                icon={<SaveOutlined />}
+                loading={saving}
+                disabled={!dirty}
+                onClick={save}
+              >
+                保存
+              </Button>
+            </>
+          ) : (
+            <Button size="small" icon={<EditOutlined />} onClick={() => setEditing(true)}>
+              编辑
+            </Button>
+          )}
           <Button size="small" icon={<ReloadOutlined />} onClick={() => setReloadToken((v) => v + 1)}>
             整屏刷新
           </Button>
@@ -263,13 +373,13 @@ export default function DashboardPage() {
           description="通常是数据集改名或被下线了，去配置管理里改这个面板的数据集即可。"
         />
       )}
-      {dashboard.panels.length === 0 ? (
+      {panels.length === 0 ? (
         <Card>
           <Empty description="这张大盘还没有面板" />
         </Card>
       ) : (
         <Row gutter={[12, 12]}>
-          {dashboard.panels.map((p) => {
+          {panels.map((p) => {
             const extra = extraFor(p);
             const note = extra
               ? [
@@ -287,12 +397,42 @@ export default function DashboardPage() {
                   filterNote={note}
                   noFollow={p.follow === false}
                   onPointClick={onPointClick}
+                  actions={
+                    editing ? (
+                      <Space size={2}>
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<EditOutlined />}
+                          onClick={() => setEditingPanel(p)}
+                        />
+                        <Button
+                          size="small"
+                          type="text"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => setDraft(panels.filter((x) => x.id !== p.id))}
+                        />
+                      </Space>
+                    ) : null
+                  }
                 />
               </Col>
             );
           })}
         </Row>
       )}
+
+      <PanelEditor
+        open={!!editingPanel}
+        panel={editingPanel}
+        datasets={datasets}
+        onClose={() => setEditingPanel(null)}
+        onSubmit={(updated) => {
+          setDraft(panels.map((x) => (x.id === updated.id ? updated : x)));
+          setEditingPanel(null);
+        }}
+      />
     </div>
   );
 }

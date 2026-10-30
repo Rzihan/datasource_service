@@ -31,6 +31,9 @@ interface Props {
   onPointClick?: (panel: DashboardPanel, x: string) => void;
   // 面板被大盘筛选影响时，角标上要说一句，否则「这个数怎么变小了」无从解释
   filterNote?: string;
+  // 编辑态下挂在卡片右上角的操作（改 / 删）。放在外面而不是卡片自己决定：
+  // 「能不能编辑」是大盘的事，不是面板的事。
+  actions?: React.ReactNode;
   // 作者把这个面板设成不跟随整屏筛选。必须显示出来：
   // 收窄之后唯独这一块数字没变，用户会以为筛选坏了。
   noFollow?: boolean;
@@ -43,6 +46,7 @@ export default function DashboardPanelCard({
   onPointClick,
   filterNote,
   noFollow,
+  actions,
 }: Props) {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState('');
@@ -217,9 +221,12 @@ export default function DashboardPanelCard({
         </Space>
       }
       extra={
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {VIEW_LABEL[panel.view]}
-        </Typography.Text>
+        <Space size={6}>
+          {actions}
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {VIEW_LABEL[panel.view]}
+          </Typography.Text>
+        </Space>
       }
       styles={{ body: { height: panel.height, overflow: 'auto', padding: 8 } }}
       style={{ height: '100%' }}
