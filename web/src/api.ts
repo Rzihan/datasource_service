@@ -2,6 +2,7 @@ import axios from 'axios';
 import type {
   CreatePayload,
   DatasetConfig,
+  DatasetEntry,
   DatasetMeta,
   DatasetStats,
   DryRunResult,
@@ -124,6 +125,31 @@ export async function appendDatasetExample(
     acl: cfg.acl ?? {},
     status: cfg.status,
     meta: { ...meta, examples, default_example: asDefault ? example.query : meta.default_example },
+    version: cfg.version,
+  });
+}
+
+// 改菜单入口配置（状态 / 默认视图 / 差异说明…）。
+// 内部仍是「读配置 → 打补丁 → 带 version 回写」：入口是数据集的一部分，
+// 不该为它单开一套存储，也不该绕开乐观锁。
+export async function updateDatasetEntry(
+  key: string,
+  patch: Partial<DatasetEntry>,
+): Promise<DatasetConfig> {
+  const cfg = await fetchOne(key);
+  const prev = cfg.meta?.entry;
+  if (!prev?.key) throw new Error('这个数据集还没挂入口');
+  const entry: DatasetEntry = { ...prev, ...patch };
+  return updateDataset(key, {
+    dataset_name: cfg.dataset_name,
+    mid_sql: cfg.mid_sql,
+    dim_map: cfg.dim_map,
+    multi_dim_map: cfg.multi_dim_map ?? {},
+    mtx_map: cfg.mtx_map,
+    label_map: cfg.label_map ?? {},
+    acl: cfg.acl ?? {},
+    status: cfg.status,
+    meta: { ...(cfg.meta ?? {}), entry },
     version: cfg.version,
   });
 }

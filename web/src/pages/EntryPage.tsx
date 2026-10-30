@@ -1,13 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Alert, Breadcrumb, Button, Card, Empty, Space, Spin, Tag, Tooltip, Typography } from 'antd';
-import { ArrowLeftOutlined, AppstoreOutlined } from '@ant-design/icons';
+import { Alert, App as AntApp, Breadcrumb, Button, Card, Empty, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { ArrowLeftOutlined, AppstoreOutlined, PushpinOutlined } from '@ant-design/icons';
+import { updateDatasetEntry } from '../api';
+import { recordVisit } from '../utils/migration';
 import QueryPage from './QueryPage';
 import type { QueryDataset } from '../types';
 import { collectEntries, findEntry, statusText } from '../utils/entries';
 
 interface Props {
   datasets: QueryDataset[];
+  onReload?: () => void;
 }
 
 // 挂载在旧菜单下的可视化查询入口。
@@ -15,7 +18,8 @@ interface Props {
 // 它存在的全部意义是：历史用户点他熟悉的菜单就能到新版，不用先去可视化查询页、
 // 再在数据集列表里认出哪个是自己原来那张表。所以这一页刻意不提供「换数据集」，
 // 查询能力照旧——少的只是那个他本来就不会动的入口。
-export default function EntryPage({ datasets }: Props) {
+export default function EntryPage({ datasets, onReload }: Props) {
+  const { message } = AntApp.useApp();
   const { entryKey } = useParams();
   const [searchParams] = useSearchParams();
   const entries = useMemo(() => collectEntries(datasets), [datasets]);
@@ -26,6 +30,38 @@ export default function EntryPage({ datasets }: Props) {
   // 只在首次渲染取一次：查询页会把状态单向写回 URL，而它只写自己认识的参数，
   // 跟着 searchParams 走的话这条提示会在第一个查询完成后自己消失。
   const [fromLegacy] = useState(() => searchParams.get('from') === 'legacy');
+  const [pinning, setPinning] = useState(false);
+
+  // 记一次「新版被打开」：迁移看板要靠它回答「还有没有人在用旧页」
+  useEffect(() => {
+    if (entry) recordVisit(entry.legacy || entry.key, 'entry');
+    // 只在进入这一屏时记一次，URL 变化不该重复计数
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry?.key]);
+
+  // 把当前这一屏设为这个入口的默认视图。
+  // 作者最自然的动作是「调好一张图 → 钉住」，而不是去配置页手敲一段查询串。
+  const pinCurrent = async () => {
+    if (!entry) return;
+    const sp = new URLSearchParams(window.location.search);
+    sp.delete('ds');
+    sp.delete('from');
+    const q = sp.toString();
+    if (!q) {
+      message.warning('这一屏还没有查询条件');
+      return;
+    }
+    setPinning(true);
+    try {
+      await updateDatasetEntry(entry.datasetKey, { default_query: q });
+      message.success('已设为该入口的默认视图：下次从这里进来就是这一屏');
+      onReload?.();
+    } catch (e) {
+      message.error((e as Error).message || '保存失败');
+    } finally {
+      setPinning(false);
+    }
+  };
 
   if (datasets.length === 0) {
     return (
@@ -101,6 +137,11 @@ export default function EntryPage({ datasets }: Props) {
                 </Button>
               </Link>
             )}
+            <Tooltip title="把当前这一屏钉成这个入口的默认视图：下次从这里进来就是它">
+              <Button size="small" icon={<PushpinOutlined />} loading={pinning} onClick={() => void pinCurrent()}>
+                设为该入口默认
+              </Button>
+            </Tooltip>
             <Tooltip title="这个入口锁定了数据集；要看别的数据集，去完整查询页">
               <Link to={`/query?ds=${encodeURIComponent(entry.datasetKey)}`}>
                 <Button size="small" icon={<AppstoreOutlined />}>

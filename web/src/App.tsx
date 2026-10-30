@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { App as AntApp, Input, Layout, Menu, Segmented, Select, Space, Tooltip, Typography } from 'antd';
-import { AppstoreOutlined, BarChartOutlined, TagsOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, BarChartOutlined, SwapOutlined, TagsOutlined } from '@ant-design/icons';
 import DatasetList from './pages/DatasetList';
 import EntryPage from './pages/EntryPage';
 import LabelList from './pages/LabelList';
 import LegacyPage from './pages/LegacyPage';
+import MigrationBoard from './pages/MigrationBoard';
 import QueryPage from './pages/QueryPage';
 import { fetchQueryDatasets } from './api';
 import type { QueryDataset } from './types';
@@ -50,6 +51,7 @@ const fixedMenuItems = [
   { key: '/datasets', icon: <AppstoreOutlined />, label: '配置管理' },
   { key: '/labels', icon: <TagsOutlined />, label: '字段名称' },
   { key: '/query', icon: <BarChartOutlined />, label: '可视化查询' },
+  { key: '/migration', icon: <SwapOutlined />, label: '迁移看板' },
 ];
 
 export default function App() {
@@ -74,6 +76,13 @@ export default function App() {
     void load();
     return subscribeTenants(() => void load());
   }, []);
+
+  // 迁移看板改完入口状态要立刻看到新菜单，所以给它一个重拉的方法
+  const reloadDatasets = () => {
+    fetchQueryDatasets()
+      .then((res) => setDatasets(res.items ?? []))
+      .catch(() => setDatasets([]));
+  };
 
   // 用户在旧页面上的表态会影响菜单去向（比如他说了「以后再说」），所以要订阅
   const [migrateVersion, setMigrateVersion] = useState(0);
@@ -217,8 +226,9 @@ export default function App() {
             <Route path="/datasets" element={<DatasetList />} />
             <Route path="/labels" element={<LabelList />} />
             <Route path="/query" element={<QueryPage />} />
+            <Route path="/migration" element={<MigrationBoard datasets={datasets} onReload={reloadDatasets} />} />
             {/* 挂在旧菜单下的入口：/e/{入口 key}，数据集与默认视图由入口配置决定 */}
-            <Route path="/e/:entryKey" element={<EntryPage datasets={datasets} />} />
+            <Route path="/e/:entryKey" element={<EntryPage datasets={datasets} onReload={reloadDatasets} />} />
             {/* 存量页面：系统里那些写死的表格页 / 看板页 */}
             <Route path="/legacy/:pageKey" element={<LegacyPage datasets={datasets} />} />
             <Route path="*" element={<Navigate to="/datasets" replace />} />

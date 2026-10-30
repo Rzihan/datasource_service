@@ -1,9 +1,11 @@
+import { useEffect } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Breadcrumb, Button, Card, Empty, Space, Table, Tag, Typography } from 'antd';
 import type { QueryDataset } from '../types';
 import { findLegacyPage } from '../utils/legacyPages';
 import { collectEntries } from '../utils/entries';
 import MigrationBanner from '../components/MigrationBanner';
+import { recordVisit } from '../utils/migration';
 
 interface Props {
   datasets: QueryDataset[];
@@ -18,6 +20,11 @@ export default function LegacyPage({ datasets }: Props) {
   const { pageKey } = useParams();
   const page = findLegacyPage(pageKey);
   const entries = collectEntries(datasets).filter((e) => e.legacy === pageKey);
+
+  // 记一次「旧页被打开」：这是迁移看板上「还有多少人在用旧页」的分子
+  useEffect(() => {
+    if (pageKey) recordVisit(pageKey, 'legacy');
+  }, [pageKey]);
 
   if (!page) {
     return (
