@@ -1,9 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { App, Alert, Button, Card, Col, Drawer, Empty, List, Row, Space, Spin, Tag, Tooltip, Typography } from 'antd';
-import { DeleteOutlined, HistoryOutlined, LinkOutlined } from '@ant-design/icons';
+import {
+  App,
+  Alert,
+  Button,
+  Card,
+  Col,
+  Drawer,
+  Empty,
+  Input,
+  List,
+  Modal,
+  Row,
+  Space,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd';
+import {
+  DeleteOutlined,
+  HistoryOutlined,
+  LinkOutlined,
+  StarFilled,
+  StarOutlined,
+} from '@ant-design/icons';
 import QueryBuilder from '../components/QueryBuilder';
 import ResultView from '../components/ResultView';
+import FavoritesDrawer from '../components/FavoritesDrawer';
 import { executeQuery, fetchDimValues, fetchQueryDatasets } from '../api';
 import type { CompareRequest, FilterNode, OrderBy, QueryDataset, QueryResult } from '../types';
 import {
@@ -18,6 +42,15 @@ import {
 import { isAdditiveMetric } from '../utils/format';
 import type { HistoryEntry } from '../utils/queryHistory';
 import { clearHistory, historyTime, loadHistory, pushHistory } from '../utils/queryHistory';
+import type { FavoriteEntry } from '../utils/favorites';
+import {
+  clearFavorites,
+  favoriteSignature,
+  loadFavorites,
+  removeFavorite,
+  renameFavorite,
+  saveFavorite,
+} from '../utils/favorites';
 import { subscribeTenants } from '../identity';
 
 // 一次查询的完整输入。抽成对象是为了两件事：
@@ -59,6 +92,12 @@ export default function QueryPage() {
   const [dimValueLoading, setDimValueLoading] = useState<Record<string, boolean>>({});
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // 收藏：和历史分开存。历史是滚动的「刚才查过什么」，收藏是有名字的「每周都要看一次」。
+  const [favorites, setFavorites] = useState<FavoriteEntry[]>(loadFavorites);
+  const [favOpen, setFavOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveName, setSaveName] = useState('');
+  const [saveNote, setSaveNote] = useState('');
 
   // URL 只在「首次加载完数据集」时读一次：之后 URL 由下面那个同步 effect 单向写，
   // 免得读改写互相触发，把用户的输入抖掉。
@@ -328,6 +367,79 @@ export default function QueryPage() {
     return ds?.label_map?.[field] || field;
   };
 
+  // ── 收藏 ────────────────────────────────────────────────────────────
+  // 收藏存的是「一屏查询的完整输入」，不是一条 URL。
+  // 存输入的原因：数据集字段可能改名，打开时按当前字段重新校验一遍，
+  // 比存一条会 404 的链接稳；而且收藏列表里要能显示「按什么维度、什么指标」。
+  const currentSnapshot = () => ({
+    datasetKey: selectedKey,
+    dims,
+    metrics,
+    filterTree: pruneEmpty(filterTree) ?? emptyRoot(),
+    orderBy,
+    limit,
+    compare,
+  });
+
+  const currentSig = favoriteSignature(currentSnapshot());
+  const currentFavorite = favorites.find((f) => favoriteSignature(f) === currentSig);
+
+  // 默认名：数据集 + 维度 + 指标。用户多半会改，但有个能用的起点比空着强——
+  // 空着的话收藏夹里会躺一堆「未命名」。
+  const suggestedName = () => {
+    const dsName = selected?.dataset_name ?? selectedKey;
+    const dimText = dims.map((d) => labelOf(selectedKey)(d)).join('、');
+    const mtxText = metrics.map((m) => labelOf(selectedKey)(m)).join('、');
+    const filterText = describeFilter(pruneEmpty(filterTree), labelOf(selectedKey));
+    return [dsName, dimText && `按${dimText}`, mtxText, compare && (compare.mode === 'prev_year' ? '同比' : '环比')]
+      .filter(Boolean)
+      .join(' · ')
+      .concat(filterText ? `（${filterText}）` : '')
+      .slice(0, 40);
+  };
+
+  const openSaveModal = () => {
+    if (!selectedKey) return;
+    setSaveName(suggestedName());
+    setSaveNote('');
+    setSaveOpen(true);
+  };
+
+  const doSave = () => {
+    const name = saveName.trim() || suggestedName();
+    setFavorites(
+      saveFavorite({ ...currentSnapshot(), name, note: saveNote.trim() || undefined }),
+    );
+    setSaveOpen(false);
+    message.success(`已收藏「${name}」`);
+  };
+
+  const openFavorite = (f: FavoriteEntry) => {
+    const ds = datasets.find((d) => d.dataset_key === f.datasetKey);
+    if (!ds) {
+      message.warning('该数据集已不可见或已删除，无法打开');
+      return;
+    }
+    setFavOpen(false);
+    setSelectedKey(f.datasetKey);
+    setDims(f.dims);
+    setMetrics(f.metrics);
+    setFilterTree(f.filterTree);
+    setOrderBy(f.orderBy ?? null);
+    setLimit(f.limit);
+    setCompare(f.compare ?? null);
+    setDrills([]);
+    void execute({
+      key: f.datasetKey,
+      dims: f.dims,
+      metrics: f.metrics,
+      filterTree: f.filterTree,
+      orderBy: f.orderBy ?? null,
+      limit: f.limit,
+      compare: f.compare ?? null,
+    });
+  };
+
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(window.location.href);
@@ -348,6 +460,22 @@ export default function QueryPage() {
           title="查询构建器"
           extra={
             <Space size={0}>
+              <Tooltip title={currentFavorite ? `已收藏：${currentFavorite.name}` : '把当前这一屏存成名字，下次一点就回来'}>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={currentFavorite ? <StarFilled style={{ color: '#faad14' }} /> : <StarOutlined />}
+                  disabled={!selectedKey}
+                  onClick={openSaveModal}
+                >
+                  {currentFavorite ? '已收藏' : '收藏'}
+                </Button>
+              </Tooltip>
+              <Tooltip title="打开收藏夹">
+                <Button size="small" type="text" onClick={() => setFavOpen(true)}>
+                  收藏夹{favorites.length > 0 ? ` ${favorites.length}` : ''}
+                </Button>
+              </Tooltip>
               <Tooltip title="最近的查询，可一键回填">
                 <Button
                   size="small"
@@ -476,6 +604,55 @@ export default function QueryPage() {
           />
         </Card>
       </Col>
+
+      <FavoritesDrawer
+        open={favOpen}
+        onClose={() => setFavOpen(false)}
+        favorites={favorites}
+        datasets={datasets}
+        activeId={currentFavorite?.id}
+        canSave={!!selectedKey}
+        onSaveCurrent={openSaveModal}
+        onOpen={openFavorite}
+        onRename={(id, name, note) => {
+          setFavorites(renameFavorite(id, { name, note: note || undefined }));
+          message.success('已更新');
+        }}
+        onDelete={(id) => setFavorites(removeFavorite(id))}
+        onClear={() => {
+          setFavorites(clearFavorites());
+          message.success('收藏已清空');
+        }}
+      />
+
+      <Modal
+        title="收藏当前查询"
+        open={saveOpen}
+        onOk={doSave}
+        onCancel={() => setSaveOpen(false)}
+        okText="收藏"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Input
+            placeholder="给它起个名字"
+            value={saveName}
+            maxLength={40}
+            onChange={(e) => setSaveName(e.target.value)}
+          />
+          <Input.TextArea
+            placeholder="备注：这张图用来看什么、什么时候看（可留空）"
+            value={saveNote}
+            rows={3}
+            maxLength={120}
+            onChange={(e) => setSaveNote(e.target.value)}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            存的是「数据集 + 维度 + 指标 + 筛选 + 排序 + 对比周期」这一整套，打开时按当前字段重新校验。
+          </Typography.Text>
+        </Space>
+      </Modal>
 
       <Drawer
         title="查询历史"
