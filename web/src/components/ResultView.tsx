@@ -1,4 +1,4 @@
-import { Suspense, lazy, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import {
   Alert,
@@ -118,10 +118,35 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     });
   }, [result, metrics]);
 
+  // 排序比较器：表头点击与导出排序共用一套，导出的顺序才会和屏幕上一致。
+  const compareAt = useCallback(
+    (i: number, a: Record<string, unknown>, b: Record<string, unknown>) => {
+      const m = columnMeta[i];
+      const av = a[`c${i}`];
+      const bv = b[`c${i}`];
+      if (!m) return 0;
+      if (m.numeric) {
+        const x = parseScaled(av, m.digits);
+        const y = parseScaled(bv, m.digits);
+        if (x === null || y === null) return x === y ? 0 : x === null ? -1 : 1;
+        return x < y ? -1 : x > y ? 1 : 0;
+      }
+      return String(av ?? '').localeCompare(String(bv ?? ''), 'zh-CN');
+    },
+    [columnMeta],
+  );
+
+  const columns = useMemo(() => {
+    return columnMeta.map((m, i) => ({
+      title: columnTitle(m.name, labelMap),
       dataIndex: `c${i}`,
       key: `c${i}`,
       ellipsis: true,
-      render: (v: unknown) => renderCell(v),
+      align: (m.numeric ? 'right' : 'left') as 'right' | 'left',
+      render: (v: unknown) => renderCell(v, m.numeric, m.digits),
+      // 本地排序：数据已经在内存里，想看「谁最高」不该回左边重设排序再查一遍。
+      // 数值按定点大小比较（不经过 float），维度按中文拼音序。
+      sorter: (a: Record<string, unknown>, b: Record<string, unknown>) => compareAt(i, a, b),
     }));
   }, [columnMeta, labelMap, compareAt]);
 
@@ -457,6 +482,11 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
                 dataSource={dataSource}
                 scroll={{ x: 'max-content' }}
                 summary={() => summaryRow}
+                onChange={(_pagination, _filters, sorter) => {
+                  const single = Array.isArray(sorter) ? sorter[0] : sorter;
+                  const key = single?.order ? String(single.columnKey ?? '') : '';
+                  setSortInfo(key ? { key, order: single.order as 'ascend' | 'descend' } : null);
+                }}
                 pagination={{
                   defaultPageSize: 20,
                   showSizeChanger: true,
