@@ -27,6 +27,7 @@ type Deps struct {
 	DS     *handler.DatasetHandler
 	LH     *handler.LabelHandler
 	QH     *query.Handler
+	DH     *handler.DashboardHandler
 }
 
 // New 构建 gin 引擎：API 路由 + 前端静态资源 + SPA fallback。
@@ -84,6 +85,15 @@ func New(d Deps) *gin.Engine {
 		v1.GET("/datasets/:key/dim-values", d.QH.DimValues)
 		// 数据集体检报告：行数 / 覆盖区间 / 负责人 / 更新频率
 		v1.GET("/datasets/:key/stats", d.QH.Stats)
+
+		// 大盘：一屏多个面板，面板各自是一次可视化查询。
+		// 单独一组路由而不是挂在 /datasets 下：/datasets/:key 的通配段
+		// 会与同级静态段冲突，而且大盘本来就不属于某个数据集。
+		v1.GET("/dashboards", d.DH.List)
+		v1.POST("/dashboards", d.DH.Create)
+		v1.GET("/dashboards/:key", d.DH.Get)
+		v1.PUT("/dashboards/:key", d.DH.Update)
+		v1.DELETE("/dashboards/:key", d.DH.Delete)
 	}
 
 	source := mountSPA(r, d.Config.StaticDir)

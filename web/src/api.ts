@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   CreatePayload,
+  Dashboard,
   DatasetConfig,
   DatasetEntry,
   DatasetMeta,
@@ -196,4 +197,34 @@ export function deleteLabel(key: string): Promise<unknown> {
 // 一致性检查：冲突 / 大小写不生效 / 缺失 / 孤儿
 export function fetchLabelCheck(): Promise<LabelCheckResult> {
   return unwrap(http.get('/label-check'));
+}
+
+// ---- 大盘 ----
+
+export function fetchDashboards(): Promise<{ items: Dashboard[] }> {
+  return unwrap(http.get('/dashboards'));
+}
+
+export function fetchDashboard(key: string): Promise<Dashboard> {
+  return unwrap(http.get(`/dashboards/${encodeURIComponent(key)}`));
+}
+
+// 新建大盘。key 进 URL，所以与入口同款：只允许小写字母数字短横线，
+// 非法值在后端会被拒——这里不做前端兜底改写，因为「我写的 key 被悄悄改了」
+// 比直接报错更难排查。
+export function createDashboard(payload: Dashboard): Promise<Dashboard> {
+  return unwrap(http.post('/dashboards', payload));
+}
+
+// 更新大盘。带 version 做乐观锁：两个人同时改布局时，后提交的那个要看到
+// 「被别人改过了」，而不是静默覆盖掉对方刚拖好的顺序。
+export function updateDashboard(
+  key: string,
+  payload: Partial<Dashboard> & { version: number },
+): Promise<Dashboard> {
+  return unwrap(http.put(`/dashboards/${encodeURIComponent(key)}`, payload));
+}
+
+export function deleteDashboard(key: string): Promise<{ key: string }> {
+  return unwrap(http.delete(`/dashboards/${encodeURIComponent(key)}`));
 }

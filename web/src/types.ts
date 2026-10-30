@@ -357,3 +357,54 @@ export interface LabelCheckResult {
   dataset_count: number;
   global_count: number;
 }
+
+// 面板画成什么。与后端 PanelView 常量一一对应，
+// 刻意不做更多类型：多一种就要作者多理解一次「条形图和柱状图有什么区别」，
+// 而看板上的收益几乎为零。
+export type PanelView = 'table' | 'metric' | 'line' | 'column' | 'pie';
+
+// 大盘里的一个面板 = 一次可视化查询 + 怎么呈现它。
+//
+// 面板不自己定义「数据怎么算」：dataset + query 与查询页共用同一段查询串，
+// 于是「在查询页调好的那一屏」可以直接搬进大盘，不需要翻译，
+// 也不会出现链接能开、面板开不了的两套规则。
+export interface DashboardPanel {
+  id: string;
+  title?: string;
+  note?: string;
+  dataset: string;
+  query?: string;
+  view: PanelView;
+  // 12 栅格里占几列
+  span: number;
+  // 像素高度。给高度而不是自适应：大盘要能一眼扫完，高度不齐视觉会乱跳
+  height: number;
+  // 指标卡形态下取哪一列做主数字
+  metric?: string;
+  // 是否跟随大盘级筛选（v32）。undefined = 跟随
+  follow?: boolean;
+  // 面板自己声明的筛选字段（v32 联动时用）
+  emit_filter?: string;
+}
+
+// 大盘级筛选器：整屏都要按它收窄，面板可以声明不跟随。
+export interface DashboardFilter {
+  field: string;
+  label?: string;
+  dataset?: string;
+  default?: string;
+}
+
+export interface Dashboard {
+  key: string;
+  title: string;
+  module?: string;
+  desc?: string;
+  owner?: string;
+  legacy?: string;
+  panels: DashboardPanel[];
+  filters?: DashboardFilter[];
+  version: number;
+  updated_by?: string;
+  updated_at?: string;
+}

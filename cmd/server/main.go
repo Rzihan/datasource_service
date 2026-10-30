@@ -68,7 +68,11 @@ func main() {
 		repo.NewDatasetRepo(db), chEngine, labelSvc, cfg.Query,
 		time.Duration(cfg.CH.QueryTimeoutSeconds)*time.Second,
 	))
-	engine := router.New(router.Deps{Config: cfg, DB: db, DS: dsHandler, LH: labelHandler, QH: queryHandler})
+	// 大盘：与数据集平级的一等公民，一张大盘天然跨多个数据集
+	dashboardHandler := handler.NewDashboardHandler(service.NewDashboardService(repo.NewDashboardRepo(db)))
+	engine := router.New(router.Deps{
+		Config: cfg, DB: db, DS: dsHandler, LH: labelHandler, QH: queryHandler, DH: dashboardHandler,
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + itoa(cfg.HTTPPort),

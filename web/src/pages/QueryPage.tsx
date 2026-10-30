@@ -73,21 +73,12 @@ import {
 } from '../utils/favorites';
 import { subscribeTenants } from '../identity';
 import { setPrefs, usePrefs } from '../utils/prefs';
+import type { QueryIntent } from '../utils/intent';
+import { parseIntent as parseIntentShared } from '../utils/intent';
 
-// 一次查询的完整输入。抽成对象是为了两件事：
-//   1. 从 URL 恢复时要拿「刚解析出来的值」直接查，不能等 setState 生效；
-//   2. 查询历史回填时要能一次性替换掉全部条件。
-interface QueryIntent {
-  key: string;
-  dims: string[];
-  metrics: string[];
-  filterTree: FilterNode;
-  orderBy: OrderBy | null;
-  limit: number;
-  compare: CompareRequest | null;
-}
-
-const MAX_LIMIT = 10000;
+// 查询意图的解析挪到了 utils/intent：大盘的面板、入口默认视图、
+// 预置分析都要用同一份规则，各留一份必然会长歪。
+const parseIntent = (ds: QueryDataset, sp: URLSearchParams): QueryIntent => parseIntentShared(ds, sp);
 
 // 入口页复用这一整屏，只是把数据集固定住：
 // 迁移场景里用户是从旧菜单点进来的，他要的是「原来那张表的可视化版」，
@@ -198,39 +189,6 @@ export default function QueryPage({ locked }: Props = {}) {
     },
     [message],
   );
-
-  // 把一段查询串解析成一次查询意图。URL 与「作者预置的分析」共用这一份解析：
-  // 预置存的就是 URL 里 ds 之后的那一段，只要链接能还原，预置就一定能还原，
-  // 不需要维护两套规则，也不会出现「链接能开、预置开不了」。
-  const parseIntent = (ds: QueryDataset, sp: URLSearchParams): QueryIntent => {
-    // 查询串可能来自别的环境 / 数据集改过字段，只保留当前数据集真实存在的字段
-    const parseList = (name: string, allowed: (f: string) => boolean) =>
-      (sp.get(name) ?? '').split(',').filter((v) => v && allowed(v));
-
-    const dims = parseList('dims', (f) => f in ds.dim_map || f in ds.multi_dim_map);
-    const metrics = parseList('metrics', (f) => f in ds.mtx_map);
-
-    let filter: FilterNode = emptyRoot();
-    const rawFilter = sp.get('filter');
-    if (rawFilter) {
-      try {
-        filter = JSON.parse(rawFilter) as FilterNode;
-      } catch {
-        filter = emptyRoot();
-      }
-    }
-    const orderField = sp.get('order') ?? '';
-    const order: OrderBy | null = orderField ? { field: orderField, desc: sp.get('dir') !== 'asc' } : null;
-    const parsedLimit = Number(sp.get('limit') ?? 1000) || 1000;
-    const safeLimit = Math.min(Math.max(parsedLimit, 1), MAX_LIMIT);
-    const cmpMode = sp.get('cmp');
-    const cmpField = sp.get('cmpf') ?? '';
-    const cmp: CompareRequest | null =
-      (cmpMode === 'prev_period' || cmpMode === 'prev_year') && cmpField in ds.dim_map
-        ? { mode: cmpMode, field: cmpField }
-        : null;
-    return { key: ds.dataset_key, dims, metrics, filterTree: filter, orderBy: order, limit: safeLimit, compare: cmp };
-  };
 
   // 一次落全量状态再查：不能让用户「先选数据集、再看预置里少了什么」。
   // 预置里带了 filter / 对比周期也一样，点一下就该是作者当时看到的那张图。

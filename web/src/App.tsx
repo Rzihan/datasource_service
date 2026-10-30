@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { App as AntApp, Input, Layout, Menu, Segmented, Select, Space, Tooltip, Typography } from 'antd';
-import { AppstoreOutlined, BarChartOutlined, SwapOutlined, TagsOutlined } from '@ant-design/icons';
+import {
+  AppstoreOutlined,
+  BarChartOutlined,
+  DashboardOutlined,
+  SwapOutlined,
+  TagsOutlined,
+} from '@ant-design/icons';
+import DashboardList from './pages/DashboardList';
+import DashboardPage from './pages/DashboardPage';
 import DatasetList from './pages/DatasetList';
 import EntryPage from './pages/EntryPage';
 import LabelList from './pages/LabelList';
@@ -51,6 +59,7 @@ const fixedMenuItems = [
   { key: '/datasets', icon: <AppstoreOutlined />, label: '配置管理' },
   { key: '/labels', icon: <TagsOutlined />, label: '字段名称' },
   { key: '/query', icon: <BarChartOutlined />, label: '可视化查询' },
+  { key: '/dashboards', icon: <DashboardOutlined />, label: '仪表盘' },
   { key: '/migration', icon: <SwapOutlined />, label: '迁移看板' },
 ];
 
@@ -226,6 +235,9 @@ export default function App() {
             <Route path="/datasets" element={<DatasetList />} />
             <Route path="/labels" element={<LabelList />} />
             <Route path="/query" element={<QueryPage />} />
+            <Route path="/dashboards" element={<DashboardList />} />
+            {/* 一张大盘：一屏多面板，面板各自是一次可视化查询 */}
+            <Route path="/d/:dashKey" element={<DashboardPage />} />
             <Route path="/migration" element={<MigrationBoard datasets={datasets} onReload={reloadDatasets} />} />
             {/* 挂在旧菜单下的入口：/e/{入口 key}，数据集与默认视图由入口配置决定 */}
             <Route path="/e/:entryKey" element={<EntryPage datasets={datasets} onReload={reloadDatasets} />} />
