@@ -32,6 +32,9 @@ interface Props {
   yLabel?: string;
   // 柱状图的排列方式：分组（比较单个值）或堆叠（看总量构成）
   stacked?: boolean;
+  // 点某个图形元素 → 把它对应的 X 类目下钻成筛选条件。
+  // 不传就是纯展示，图上看不出「能点」，所以按钮提示放在外层。
+  onPointClick?: (x: string) => void;
 }
 
 // 轴标签压缩：ISO 日期只保留月-日。
@@ -63,6 +66,7 @@ export default function ChartView({
   xLabel,
   yLabel,
   stacked = false,
+  onPointClick,
 }: Props) {
   // 轴标签防重叠：宁可少显示几个，也不竖排。
   // 旋转 90° 的标签要歪头读，20 个类目时基本等于没有标签；
@@ -87,6 +91,20 @@ export default function ChartView({
     items: [(d: ChartPoint) => ({ name: d.series, value: d.raw || '—' })],
   };
 
+  // G2 v5 的事件负载结构在不同 mark 下不完全一样，这里做一次宽容取值：
+  // 只要能从事件里捞到带 x 的原始数据就够，拿不到就安静地什么都不做。
+  const bindClick = (chart: unknown) => {
+    if (!onPointClick) return;
+    const c = chart as { on?: (e: string, fn: (evt: unknown) => void) => void; __drillBound?: boolean };
+    if (!c?.on || c.__drillBound) return;
+    c.__drillBound = true;
+    c.on('element:click', (evt: unknown) => {
+      const e = evt as { data?: { data?: ChartPoint } };
+      const d = e?.data?.data;
+      if (d && typeof d.x === 'string' && d.x !== '(空值)') onPointClick(d.x);
+    });
+  };
+
   if (type === 'pie') {
     const first = series[0];
     const pieData = data.filter((d) => d.series === first).map((d) => ({ x: d.x, y: d.y ?? 0, raw: d.raw }));
@@ -102,6 +120,7 @@ export default function ChartView({
         colorField="x"
         height={height}
         autoFit
+        onReady={({ chart }: { chart: unknown }) => bindClick(chart)}
         label={{ text: (d: { x: string; raw: string }) => d.x, position: 'outside' }}
         legend={{ position: 'right' }}
         tooltip={{
@@ -126,6 +145,7 @@ export default function ChartView({
     colorField: 'series',
     height,
     autoFit: true,
+    onReady: ({ chart }: { chart: unknown }) => bindClick(chart),
     smooth: type === 'line',
     // NULL 必须断开，不能连成 0，否则「没数据」看起来像「数据为 0」
     connectNulls: false,

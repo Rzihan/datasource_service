@@ -83,6 +83,8 @@ interface Props {
   // 返回上限与放宽入口：「已截断」如果不给解法，只是让用户对着不全的数据继续分析
   limit: number;
   onLimitChange?: (limit: number) => void;
+  // 下钻：点图上的一根柱子、或表格里一个维度值，把它加成等值条件重查
+  onDrill?: (field: string, value: string) => void;
 }
 
 // 表头显示中文含义，原始字段名收进 Tooltip，方便对照 SQL 和下游对接
@@ -177,6 +179,7 @@ export default function ResultView({
   nonAdditive = [],
   limit,
   onLimitChange,
+  onDrill,
 }: Props) {
   const { message } = App.useApp();
   // 默认落在表格：查数首先是要看到数，图只是可选的呈现方式。
@@ -231,12 +234,33 @@ export default function ResultView({
       key: `c${i}`,
       ellipsis: true,
       align: (m.numeric ? 'right' : 'left') as 'right' | 'left',
-      render: (v: unknown) => renderCell(v, m.numeric, m.digits),
+      render: (v: unknown) => {
+        // 维度值可点：最自然的分析动作就是「只看这个值」，不该让人回左边重搭条件。
+        // 数值列不做点击——指标是聚合结果，点它下钻没有语义。
+        if (onDrill && !m.numeric && dims.includes(m.name) && v !== null && v !== undefined && v !== '') {
+          return (
+            <Tooltip title={`只看「${labelMap[m.name] || m.name} = ${String(v)}」`}>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={() => onDrill(m.name, String(v))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') onDrill(m.name, String(v));
+                }}
+                style={{ cursor: 'pointer', borderBottom: '1px dashed #d9d9d9' }}
+              >
+                {String(v)}
+              </span>
+            </Tooltip>
+          );
+        }
+        return renderCell(v, m.numeric, m.digits);
+      },
       // 本地排序：数据已经在内存里，想看「谁最高」不该回左边重设排序再查一遍。
       // 数值按定点大小比较（不经过 float），维度按中文拼音序。
       sorter: (a: Record<string, unknown>, b: Record<string, unknown>) => compareAt(i, a, b),
     }));
-  }, [columnMeta, labelMap, compareAt]);
+  }, [columnMeta, labelMap, compareAt, onDrill, dims]);
 
   // 合计行：只对当前返回的全部行求和（不是当前分页），有分组才显示。
   // 两个局限写进 tooltip 而不是藏着：截断时只是部分合计；去重类指标逐行相加会重复计数。
@@ -545,6 +569,7 @@ export default function ResultView({
         xLabel={resolvedX ? labelMap[resolvedX] || resolvedX : '汇总'}
         yLabel={series.length === 1 ? series[0] : undefined}
         stacked={type === 'column' && stackActive}
+        onPointClick={onDrill && resolvedX ? (x) => onDrill(resolvedX, x) : undefined}
       />
     </div>
   );
@@ -732,6 +757,11 @@ export default function ResultView({
           {type === 'column' && canStack && !stackActive && series.length >= 4 && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               系列较多，堆叠更易看总量
+            </Typography.Text>
+          )}
+          {onDrill && resolvedX && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              点柱子 / 扇区可按该值下钻
             </Typography.Text>
           )}
         </Space>

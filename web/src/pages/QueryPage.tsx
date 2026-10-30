@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { App, Alert, Button, Card, Col, Drawer, Empty, List, Row, Space, Spin, Tooltip, Typography } from 'antd';
+import { App, Alert, Button, Card, Col, Drawer, Empty, List, Row, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { DeleteOutlined, HistoryOutlined, LinkOutlined } from '@ant-design/icons';
 import QueryBuilder from '../components/QueryBuilder';
 import ResultView from '../components/ResultView';
 import { executeQuery, fetchDimValues, fetchQueryDatasets } from '../api';
 import type { CompareRequest, FilterNode, OrderBy, QueryDataset, QueryResult } from '../types';
-import { emptyRoot, countLeaves, describeFilter, pruneEmpty } from '../utils/filterTree';
+import {
+  addCondition,
+  countLeaves,
+  describeFilter,
+  emptyRoot,
+  hasCondition,
+  pruneEmpty,
+  removeCondition,
+} from '../utils/filterTree';
 import { isAdditiveMetric } from '../utils/format';
 import type { HistoryEntry } from '../utils/queryHistory';
 import { clearHistory, historyTime, loadHistory, pushHistory } from '../utils/queryHistory';
@@ -41,6 +49,9 @@ export default function QueryPage() {
   // 对比周期：开不开是一回事，「跟哪个日期维度比」是另一回事，
   // 两者一起进 URL 才能把一张带环比的图发给同事。
   const [compare, setCompare] = useState<CompareRequest | null>(null);
+  // 下钻路径：只记「点出来的」那几条，渲染时再与条件树对一遍——
+  // 用户在条件区手动删掉某条后，面包屑不该还挂在那里。
+  const [drills, setDrills] = useState<Array<{ field: string; value: string }>>([]);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [querying, setQuerying] = useState(false);
   const [error, setError] = useState<string>('');
@@ -229,6 +240,7 @@ export default function QueryPage() {
     setFilterTree(emptyRoot());
     setOrderBy(null);
     setCompare(null);
+    setDrills([]);
     setResult(null);
     setError('');
     setDimValues({});
@@ -265,6 +277,25 @@ export default function QueryPage() {
     setLimit(next);
     if (!selectedKey) return;
     void execute({ key: selectedKey, dims, metrics, filterTree, orderBy, limit: next, compare });
+  };
+
+  // 下钻：把一个维度取值变成 `= 值` 条件。
+  // 写进条件树而不是另存一份，是为了让「界面看着筛了」和「实际筛了」永远是同一件事。
+  const drillInto = (field: string, value: string) => {
+    if (!selectedKey) return;
+    const next = addCondition(pruneEmpty(filterTree) ?? emptyRoot(), { field, op: '=', value });
+    setFilterTree(next);
+    setDrills((prev) => [...prev.filter((d) => !(d.field === field && d.value === value)), { field, value }]);
+    void execute({ key: selectedKey, dims, metrics, filterTree: next, orderBy, limit, compare });
+  };
+
+  const undoDrill = (field: string, value: string) => {
+    const next = removeCondition(pruneEmpty(filterTree), field, value) ?? emptyRoot();
+    setFilterTree(next);
+    setDrills((prev) => prev.filter((d) => !(d.field === field && d.value === value)));
+    if (selectedKey) {
+      void execute({ key: selectedKey, dims, metrics, filterTree: next, orderBy, limit, compare });
+    }
   };
 
   // 历史回填：一次性替换全部条件再查，而不是让用户自己回忆当时筛了什么
@@ -305,6 +336,9 @@ export default function QueryPage() {
       message.warning('浏览器不允许自动复制，请手动复制地址栏链接');
     }
   };
+
+  // 只保留条件树里仍然存在的下钻条件，避免「条件已删、面包屑还在」
+  const drillPath = drills.filter((d) => hasCondition(pruneEmpty(filterTree), d.field, d.value));
 
   return (
     <Row gutter={16}>
@@ -375,6 +409,51 @@ export default function QueryPage() {
               description={error}
             />
           )}
+          {drillPath.length > 0 && (
+            <Space size={6} wrap style={{ marginBottom: 10 }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                下钻路径
+              </Typography.Text>
+              {drillPath.map((d) => (
+                <Tag
+                  key={`${d.field}=${d.value}`}
+                  color="geekblue"
+                  closable
+                  onClose={(e) => {
+                    e.preventDefault();
+                    undoDrill(d.field, d.value);
+                  }}
+                >
+                  {labelOf(selectedKey)(d.field)} = {d.value}
+                </Tag>
+              ))}
+              <Button
+                type="link"
+                size="small"
+                onClick={() => {
+                  let next = pruneEmpty(filterTree);
+                  drillPath.forEach((d) => {
+                    next = removeCondition(next, d.field, d.value);
+                  });
+                  setFilterTree(next ?? emptyRoot());
+                  setDrills([]);
+                  if (selectedKey) {
+                    void execute({
+                      key: selectedKey,
+                      dims,
+                      metrics,
+                      filterTree: next ?? emptyRoot(),
+                      orderBy,
+                      limit,
+                      compare,
+                    });
+                  }
+                }}
+              >
+                返回上一层以上
+              </Button>
+            </Space>
+          )}
           <ResultView
             result={result}
             dims={dims}
@@ -382,6 +461,7 @@ export default function QueryPage() {
             nonAdditive={metrics.filter((m) => !isAdditiveMetric(selected?.mtx_map?.[m]))}
             limit={limit}
             onLimitChange={setLimitAndQuery}
+            onDrill={drillInto}
             labelMap={selected?.label_map ?? {}}
             exportMeta={{
               dataset: selected ? `${selected.dataset_key} · ${selected.dataset_name}` : selectedKey,

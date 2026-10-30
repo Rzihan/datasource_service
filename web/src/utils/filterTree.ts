@@ -156,3 +156,37 @@ export function describeFilter(n: FilterNode | null, labelOf: (f: string) => str
   const body = parts.join(n.logic === 'or' ? ' 或 ' : ' 且 ');
   return parts.length > 1 ? `(${body})` : body;
 }
+
+// ---- 下钻：从图上点一个值，变成一条等值条件 ----
+//
+// 和「时间范围」同一个思路：不引入新算子，而是往条件树里写一条 `= 值`，
+// 这样条件计数、清空、URL、历史、导出全都不用改，用户也能在条件区看到它。
+// 根节点是 OR 时必须包一层，否则下钻会变成「或」，查出来的数翻倍。
+
+export function addCondition(root: FilterNode, leaf: FilterNode): FilterNode {
+  const base = pruneEmpty(root) ?? emptyRoot();
+  if (base.logic === 'or') {
+    return { logic: 'and', children: [{ ...base }, leaf] };
+  }
+  return { ...base, children: [...(base.children ?? []), leaf] };
+}
+
+// 去掉某条等值条件。下钻面包屑的「×」用它：
+// 只按 field+value 精确匹配，不会顺手删掉用户自己写的同名条件之外的任何东西。
+export function removeCondition(n: FilterNode | null, field: string, value: string): FilterNode | null {
+  if (!n) return null;
+  if (!isGroup(n)) {
+    const same = n.field === field && (n.op ?? '=') === '=' && (n.value ?? '') === value;
+    return same ? null : n;
+  }
+  const kids = (n.children ?? [])
+    .map((c) => removeCondition(c, field, value))
+    .filter((c): c is FilterNode => c !== null);
+  return kids.length > 0 ? { ...n, children: kids } : null;
+}
+
+export function hasCondition(n: FilterNode | null, field: string, value: string): boolean {
+  return collectLeaves(n).some(
+    (l) => l.field === field && (l.op ?? '=') === '=' && (l.value ?? '') === value,
+  );
+}
