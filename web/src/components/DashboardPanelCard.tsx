@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
-import { Alert, Card, Empty, Skeleton, Space, Table, Tag, Tooltip, Typography } from 'antd';
-import { DatabaseOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Empty, Skeleton, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import { DatabaseOutlined, InfoCircleOutlined, RedoOutlined } from '@ant-design/icons';
 import type { DashboardPanel, QueryDataset, QueryResult, StringMap } from '../types';
 import { executeQuery } from '../api';
 import type { FilterNode } from '../types';
@@ -34,9 +34,27 @@ interface Props {
   // 编辑态下挂在卡片右上角的操作（改 / 删）。放在外面而不是卡片自己决定：
   // 「能不能编辑」是大盘的事，不是面板的事。
   actions?: React.ReactNode;
+  // 把结果回报给大盘：整屏导出要按面板分段写，
+  // 而数据是面板自己取的，大盘拿不到。
+  onDone?: (info: PanelResult) => void;
   // 作者把这个面板设成不跟随整屏筛选。必须显示出来：
   // 收窄之后唯独这一块数字没变，用户会以为筛选坏了。
   noFollow?: boolean;
+}
+
+// 面板跑完之后的交付物。大盘用它做两件事：
+// 顶部那句「几块就绪」的汇总，以及整屏导出（每个面板一段，各带自己的口径）。
+export interface PanelResult {
+  id: string;
+  title: string;
+  result: QueryResult | null;
+  dims: string[];
+  metrics: string[];
+  labelMap: StringMap;
+  error: string;
+  filterText: string;
+  elapsedMs: number;
+  truncated: boolean;
 }
 
 export default function DashboardPanelCard({
@@ -47,10 +65,13 @@ export default function DashboardPanelCard({
   filterNote,
   noFollow,
   actions,
+  onDone,
 }: Props) {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // 单块重试：整屏八块里挂了一块，不该让人把整屏刷新一遍
+  const [retry, setRetry] = useState(0);
 
   // 面板的查询串。数据集变了（改名/字段删了）时要重跑，所以放进依赖。
   const queryKey = useMemo(() => {
@@ -111,7 +132,7 @@ export default function DashboardPanelCard({
     return () => {
       cancelled = true;
     };
-  }, [queryKey, dataset]);
+  }, [queryKey, dataset, retry]);
 
   const labelMap: StringMap = dataset?.label_map ?? {};
   // 面板自己的条件：只取 dims / metrics 用来画图与算主数字，
@@ -126,6 +147,23 @@ export default function DashboardPanelCard({
     () => (result ? buildPanelData(result, dims, metrics, labelMap) : null),
     [result, dims, metrics, labelMap],
   );
+
+  // 回报结果：导出与「几块就绪」都靠它。维度名用中文（labelMap 由大盘侧翻译）。
+  useEffect(() => {
+    if (!onDone) return;
+    onDone({
+      id: panel.id,
+      title: panel.title || '',
+      result,
+      dims,
+      metrics,
+      labelMap,
+      error,
+      filterText: filterNote ?? '',
+      elapsedMs: result?.elapsed_ms ?? 0,
+      truncated: !!result?.truncated,
+    });
+  }, [result, error, dims, metrics, labelMap, filterNote, panel.id, panel.title, onDone]);
 
   const bodyHeight = Math.max(panel.height - 92, 96);
 
@@ -145,7 +183,22 @@ export default function DashboardPanelCard({
       return <Skeleton active paragraph={{ rows: 3 }} style={{ padding: 12 }} />;
     }
     if (error) {
-      return <Alert type="error" showIcon message="这一块没跑出来" description={error} style={{ margin: 8 }} />;
+      return (
+        <Alert
+          type="error"
+          showIcon
+          style={{ margin: 8 }}
+          message="这一块没跑出来"
+          description={
+            <Space direction="vertical" size={4}>
+              <span>{error}</span>
+              <Button size="small" icon={<RedoOutlined />} onClick={() => setRetry((v) => v + 1)}>
+                重试这一块
+              </Button>
+            </Space>
+          }
+        />
+      );
     }
     if (!result || !data) {
       return <Empty description="暂无数据" style={{ marginTop: 24 }} />;
@@ -213,6 +266,11 @@ export default function DashboardPanelCard({
               </Tag>
             </Tooltip>
           )}
+          {panel.note && (
+            <Tooltip title={panel.note}>
+              <InfoCircleOutlined style={{ color: '#8c8c8c', cursor: 'help' }} />
+            </Tooltip>
+          )}
           {noFollow && (
             <Tooltip title="作者设定：这一块不跟随整屏筛选。它本身就是用来做横向对比的，收窄之后就没得比了">
               <Tag style={{ marginInlineEnd: 0, cursor: 'help' }}>不跟随</Tag>
@@ -223,6 +281,13 @@ export default function DashboardPanelCard({
       extra={
         <Space size={6}>
           {actions}
+          {result?.truncated && (
+            <Tooltip title="结果被截断了：这一块看到的不是全量，下结论前要留意">
+              <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                截断
+              </Tag>
+            </Tooltip>
+          )}
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {VIEW_LABEL[panel.view]}
           </Typography.Text>
@@ -232,6 +297,12 @@ export default function DashboardPanelCard({
       style={{ height: '100%' }}
     >
       {body()}
+      {result && panel.view !== 'metric' && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {result.row_count} 行 · {result.elapsed_ms} ms
+          {filterNote ? ` · ${filterNote}` : ''}
+        </Typography.Text>
+      )}
     </Card>
   );
 }

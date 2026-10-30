@@ -59,3 +59,21 @@ func TestNormalizeDashboardKeyAndTitle(t *testing.T) {
 		t.Fatalf("valid key should be trimmed: %q %v", k, err)
 	}
 }
+
+func TestNormalizeDashboardStatus(t *testing.T) {
+	// 与入口共用同一套取值：大盘和查询入口是同一场迁移里的两种目标，
+	// 状态机分裂会出现「旧页已下线、但大盘还停在并存期」的半吊子状态。
+	cases := map[string]string{
+		"":         model.EntryStatusParallel,
+		"parallel": model.EntryStatusParallel,
+		"default":  model.EntryStatusDefault,
+		"replaced": model.EntryStatusReplaced,
+		"DELETED":  model.EntryStatusParallel,
+		"  typo ":  model.EntryStatusParallel,
+	}
+	for in, want := range cases {
+		if got := normalizeDashboardStatus(in); got != want {
+			t.Fatalf("status %q: got %q want %q", in, got, want)
+		}
+	}
+}

@@ -23,11 +23,13 @@ import {
   FilterOutlined,
   PlusOutlined,
   ReloadOutlined,
+  DownloadOutlined,
   SaveOutlined,
   UndoOutlined,
 } from '@ant-design/icons';
 import type { Dashboard, DashboardPanel, FilterNode, QueryDataset } from '../types';
 import { fetchDashboard, fetchDimValues, fetchQueryDatasets, updateDashboard } from '../api';
+import type { PanelResult } from '../components/DashboardPanelCard';
 import DashboardPanelCard from '../components/DashboardPanelCard';
 import PanelEditor from '../components/PanelEditor';
 import { panelQuery, parseIntent } from '../utils/intent';
@@ -76,6 +78,30 @@ export default function DashboardPage() {
   const [editingPanel, setEditingPanel] = useState<DashboardPanel | null>(null);
   const [saving, setSaving] = useState(false);
   const panels = draft ?? dashboard?.panels ?? [];
+
+  // ── 整屏可靠性 ──────────────────────────────────────────────────
+  // 一屏八块，如果只给一个整屏 loading，任何一块慢都会让整屏看起来卡住；
+  // 反过来，任何一块挂了也只会沉默地空着。所以状态要按块报上来、按屏汇总。
+  const [panelResults, setPanelResults] = useState<Record<string, PanelResult>>({});
+  const onPanelDone = useCallback((info: PanelResult) => {
+    setPanelResults((prev) => ({ ...prev, [info.id]: info }));
+  }, []);
+  const ready = Object.values(panelResults).filter((r) => r.result).length;
+  const failed = Object.values(panelResults).filter((r) => r.error).length;
+  const slowest = Math.max(0, ...Object.values(panelResults).map((r) => r.elapsedMs));
+
+  // 自动刷新：看板是「挂着看的」，不是「点开看一眼的」。
+  // 但默认必须关——没人盯着的页面不该自己在后台一直查数仓。
+  const [autoSeconds, setAutoSeconds] = useState(0);
+  const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
+  useEffect(() => {
+    if (autoSeconds <= 0) return;
+    const timer = setInterval(() => {
+      setReloadToken((v) => v + 1);
+      setRefreshedAt(new Date());
+    }, autoSeconds * 1000);
+    return () => clearInterval(timer);
+  }, [autoSeconds]);
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(dashboard?.panels ?? []);
 
   const load = useCallback(() => {
@@ -91,7 +117,10 @@ export default function DashboardPage() {
         setDashboard(null);
         setError((e as Error).message || '加载失败');
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setRefreshedAt(new Date());
+      });
   }, [dashKey]);
 
   useEffect(() => {
@@ -216,6 +245,51 @@ export default function DashboardPage() {
     setEditing(true);
   };
 
+  // 整屏导出：一个文件、按面板分段，每段带上自己的口径。
+  // 收件人拿到的是「一堆数字」还是「能看懂的数」，差别就在这一段口径。
+  const exportCsv = () => {
+    if (!dashboard) return;
+    const chunks: string[] = [];
+    const stamp = new Date().toISOString();
+    chunks.push(`# ${dashboard.title}`);
+    chunks.push(`# 导出时间 ${stamp}`);
+    if (activeCount > 0) {
+      chunks.push(
+        `# 整屏筛选 ${[...filters.filter((f) => filterValues[f.field]).map((f) => `${f.label || f.field}=${filterValues[f.field]}`), ...crossFilters.map((c) => `${c.field}=${c.value}`)].join('、')}`,
+      );
+    }
+    for (const p of panels) {
+      const r = panelResults[p.id];
+      chunks.push('');
+      chunks.push(`# ── ${p.title || p.id}（${p.view}）`);
+      if (!r || (!r.result && !r.error)) {
+        chunks.push('# 未取到数据（可能还在加载）');
+        continue;
+      }
+      if (r.error) {
+        chunks.push(`# 失败：${r.error}`);
+        continue;
+      }
+      const res = r.result;
+      if (!res) continue;
+      chunks.push(
+        `# 数据集 ${p.dataset} · 维度 ${r.dims.join('/') || '无'} · 指标 ${r.metrics.join('/') || '无'}${r.filterText ? ` · 筛选 ${r.filterText}` : ''}`,
+      );
+      chunks.push(res.columns.map((c) => r.labelMap[c.name] || c.name).join(','));
+      for (const row of res.rows) {
+        chunks.push(row.map((v) => (v === null || v === undefined ? '' : String(v))).join(','));
+      }
+    }
+    const blob = new Blob([chunks.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${dashboard.key}-${stamp.slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    message.success('已导出整屏（每个面板一段，各带口径）');
+  };
+
   if (loading && !dashboard) {
     return (
       <Card>
@@ -242,6 +316,12 @@ export default function DashboardPage() {
           {dashboard.title}
         </Typography.Title>
         <Tag color="geekblue">{panels.length} 个面板</Tag>
+        {panels.length > 0 && (
+          <Tag color={failed > 0 ? 'red' : 'green'}>
+            {ready}/{panels.length} 块就绪
+            {failed > 0 ? ` · ${failed} 块失败` : slowest > 0 ? ` · 最慢 ${slowest} ms` : ''}
+          </Tag>
+        )}
         {dirty && <Tag color="orange">未保存</Tag>}
         {dashboard.owner && <Tag>负责人：{dashboard.owner}</Tag>}
         <div style={{ flex: 1 }} />
@@ -278,6 +358,21 @@ export default function DashboardPage() {
               编辑
             </Button>
           )}
+          <Button size="small" icon={<DownloadOutlined />} onClick={exportCsv}>
+            导出整屏
+          </Button>
+          <Select
+            size="small"
+            style={{ width: 110 }}
+            value={autoSeconds}
+            onChange={setAutoSeconds}
+            options={[
+              { value: 0, label: '不自动刷新' },
+              { value: 60, label: '每 1 分钟' },
+              { value: 300, label: '每 5 分钟' },
+              { value: 900, label: '每 15 分钟' },
+            ]}
+          />
           <Button size="small" icon={<ReloadOutlined />} onClick={() => setReloadToken((v) => v + 1)}>
             整屏刷新
           </Button>
@@ -289,9 +384,15 @@ export default function DashboardPage() {
         </Space>
       </div>
       {dashboard.desc && (
-        <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 4 }}>
           {dashboard.desc}
         </Typography.Paragraph>
+      )}
+      {refreshedAt && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          更新于 {refreshedAt.toLocaleTimeString('zh-CN')}
+          {autoSeconds > 0 ? ` · 每 ${autoSeconds >= 60 ? `${autoSeconds / 60} 分钟` : `${autoSeconds} 秒`}自动刷新` : ''}
+        </Typography.Text>
       )}
 
       {/* 整屏筛选。它回答的是「这一屏能不能一起收窄」——
@@ -397,6 +498,7 @@ export default function DashboardPage() {
                   filterNote={note}
                   noFollow={p.follow === false}
                   onPointClick={onPointClick}
+                  onDone={onPanelDone}
                   actions={
                     editing ? (
                       <Space size={2}>
