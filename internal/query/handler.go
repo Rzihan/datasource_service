@@ -46,6 +46,17 @@ func (h *Handler) Datasets(c *gin.Context) {
 	handler.OK(c, gin.H{"items": items})
 }
 
+// Stats 数据集体检报告：多少行、覆盖到哪天、谁负责、多久更新一次。
+// 让使用者在查第一个数之前就知道「这个数据集能不能信」。
+func (h *Handler) Stats(c *gin.Context) {
+	res, err := h.svc.Stats(c.Request.Context(), c.Param("key"), tenantsFromContext(c), usersFromContext(c))
+	if err != nil {
+		writeQueryError(c, err)
+		return
+	}
+	handler.OK(c, res)
+}
+
 // DryRun 配置自检：拿真实 ClickHouse 跑一遍待保存的配置。
 // 失败也算 200——诊断信息装在 result 里比降级成错误码有用。
 func (h *Handler) DryRun(c *gin.Context) {

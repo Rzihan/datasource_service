@@ -55,6 +55,7 @@ type Service struct {
 	cfg     config.QueryConfig
 	timeout time.Duration
 	sem     chan struct{} // 并发闸门
+	stats   *statsCache   // 数据集体检报告缓存（行数 / 覆盖区间）
 }
 
 // NewService 构造查询服务。labels 可为 nil，此时只使用数据集自己的 label_map。
@@ -66,6 +67,7 @@ func NewService(r *repo.DatasetRepo, e Engine, labels LabelProvider, cfg config.
 		cfg:     cfg,
 		timeout: timeout,
 		sem:     make(chan struct{}, cfg.MaxConcurrency),
+		stats:   newStatsCache(statsTTL),
 	}
 }
 

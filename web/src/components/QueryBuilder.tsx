@@ -3,7 +3,8 @@ import { App, Alert, Button, DatePicker, InputNumber, Select, Space, Switch, Tag
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
 import { ClearOutlined, SearchOutlined } from '@ant-design/icons';
-import type { CompareRequest, FilterNode, OrderBy, QueryDataset } from '../types';
+import type { CompareRequest, DatasetStats, FilterNode, OrderBy, QueryDataset } from '../types';
+import DatasetTrustCard from './DatasetTrustCard';
 import FilterTreeEditor from './FilterTreeEditor';
 import { countLeaves, emptyRoot, findRange, removeFields, stripRange, withRange } from '../utils/filterTree';
 
@@ -28,6 +29,10 @@ interface Props {
   loading: boolean;
   compare: CompareRequest | null;
   onCompareChange: (next: CompareRequest | null) => void;
+  // 数据集体检报告：由查询页异步扫描后传进来
+  stats?: DatasetStats | null;
+  statsLoading?: boolean;
+  onReloadStats?: () => void;
 }
 
 export default function QueryBuilder(props: Props) {
@@ -40,6 +45,7 @@ export default function QueryBuilder(props: Props) {
     dimValues, dimValueLoading, onRequestDimValues,
     onExecute, loading,
     compare, onCompareChange,
+    stats, statsLoading, onReloadStats,
   } = props;
   const { modal } = App.useApp();
 
@@ -205,11 +211,14 @@ export default function QueryBuilder(props: Props) {
             label: `${d.dataset_key} · ${d.dataset_name}`,
           }))}
         />
-        {selected?.meta?.description && (
-          <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '6px 0 0' }}>
-            {selected.meta.description}
-          </Typography.Paragraph>
-        )}
+        {/* 数据集的可信度：描述 + 行数 + 覆盖区间 + 负责人 + 更新频率。
+            选完数据集立刻看到，不用先查一次才知道这数据能不能用。 */}
+        <DatasetTrustCard
+          dataset={selected}
+          stats={stats ?? null}
+          loading={statsLoading}
+          onReload={onReloadStats}
+        />
       </div>
 
       <div>

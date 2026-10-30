@@ -156,6 +156,32 @@ export interface CompareMeta {
   prev_truncated: boolean;
 }
 
+// 数据集体检报告：回答「这个数据集能不能信」——
+// 多少行、覆盖到哪天、谁负责、多久更新一次。不在 dim_map 里，只能扫一遍数据才知道。
+export interface DatasetStats {
+  dataset_key: string;
+  row_count: number;
+  date_field?: string;
+  min_date?: string;
+  max_date?: string;
+  cover_days: number;
+  // max_date 距今多少天；负值说明数据里出现了未来日期
+  lag_days: number;
+  elapsed_ms: number;
+  scanned_at: string;
+  cached: boolean;
+  // 扫描失败不连坐：只是这份报告没有，数据集照样能查
+  error?: string;
+  dim_count: number;
+  multi_dim_count: number;
+  metric_count: number;
+  owner?: string;
+  update_freq?: string;
+  updated_at?: string;
+  updated_by?: string;
+  config_version: number;
+}
+
 // 查询意图：前端只描述想看什么，SQL 由后端生成，用户不感知 SQL 的存在。
 export interface QueryRequest {
   dataset_key: string;

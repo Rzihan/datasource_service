@@ -2,6 +2,7 @@ import axios from 'axios';
 import type {
   CreatePayload,
   DatasetConfig,
+  DatasetStats,
   DryRunResult,
   GlobalLabel,
   HistoryResult,
@@ -92,6 +93,12 @@ export function executeQuery(payload: QueryRequest): Promise<QueryResult> {
 
 export function fetchDimValues(key: string, field: string): Promise<{ field: string; values: string[] }> {
   return unwrap(http.get(`/datasets/${encodeURIComponent(key)}/dim-values`, { params: { field } }));
+}
+
+// 数据集体检报告。扫全表计数，后端缓存 10 分钟；失败时返回带 error 的报告，
+// 不抛错——查数不该因为「体检报告没做出来」就不能用。
+export function fetchDatasetStats(key: string): Promise<DatasetStats> {
+  return unwrap(http.get(`/datasets/${encodeURIComponent(key)}/stats`));
 }
 
 // 多值维度误配扫描：把「疑似多值维度却当指标/普通维度配着」的列出来

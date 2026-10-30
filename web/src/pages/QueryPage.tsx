@@ -28,8 +28,15 @@ import QueryBuilder from '../components/QueryBuilder';
 import ResultView from '../components/ResultView';
 import FavoritesDrawer from '../components/FavoritesDrawer';
 import DiagnosisPanel from '../components/DiagnosisPanel';
-import { executeQuery, fetchDimValues, fetchQueryDatasets } from '../api';
-import type { CompareRequest, FilterNode, OrderBy, QueryDataset, QueryResult } from '../types';
+import { executeQuery, fetchDatasetStats, fetchDimValues, fetchQueryDatasets } from '../api';
+import type {
+  CompareRequest,
+  DatasetStats,
+  FilterNode,
+  OrderBy,
+  QueryDataset,
+  QueryResult,
+} from '../types';
 import {
   addCondition,
   countLeaves,
@@ -101,6 +108,9 @@ export default function QueryPage() {
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [saveNote, setSaveNote] = useState('');
+  // 数据集体检报告：选完数据集就异步扫一次，不阻塞查询
+  const [stats, setStats] = useState<DatasetStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   // URL 只在「首次加载完数据集」时读一次：之后 URL 由下面那个同步 effect 单向写，
   // 免得读改写互相触发，把用户的输入抖掉。
@@ -287,6 +297,27 @@ export default function QueryPage() {
     setError('');
     setDimValues({});
   };
+
+  // 数据集的规模与新鲜度：选完就扫，切换就换。
+  // 单独一个请求而不是塞进数据集列表——列表要快，扫全表要慢，混在一起会把下拉拖住。
+  const loadStats = useCallback(
+    (key: string) => {
+      if (!key) {
+        setStats(null);
+        return;
+      }
+      setStatsLoading(true);
+      fetchDatasetStats(key)
+        .then(setStats)
+        .catch((e: Error) => setStats({ dataset_key: key, row_count: 0, cover_days: 0, lag_days: 0, elapsed_ms: 0, scanned_at: '', cached: false, dim_count: 0, multi_dim_count: 0, metric_count: 0, config_version: 0, error: e.message }))
+        .finally(() => setStatsLoading(false));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    loadStats(selectedKey);
+  }, [selectedKey, loadStats]);
 
   const onRequestDimValues = useCallback(
     (field: string) => {
@@ -572,6 +603,9 @@ export default function QueryPage() {
               loading={querying}
               compare={compare}
               onCompareChange={setCompare}
+              stats={stats}
+              statsLoading={statsLoading}
+              onReloadStats={() => loadStats(selectedKey)}
             />
           )}
         </Card>

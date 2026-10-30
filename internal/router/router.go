@@ -82,6 +82,8 @@ func New(d Deps) *gin.Engine {
 		v1.POST("/query/execute", d.QH.Execute)
 		// 维度候选值，供前端下拉枚举
 		v1.GET("/datasets/:key/dim-values", d.QH.DimValues)
+		// 数据集体检报告：行数 / 覆盖区间 / 负责人 / 更新频率
+		v1.GET("/datasets/:key/stats", d.QH.Stats)
 	}
 
 	source := mountSPA(r, d.Config.StaticDir)
