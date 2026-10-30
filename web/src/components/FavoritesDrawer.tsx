@@ -12,9 +12,10 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { DeleteOutlined, EditOutlined, StarOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, PushpinOutlined, StarOutlined } from '@ant-design/icons';
 import type { QueryDataset } from '../types';
 import type { FavoriteEntry } from '../utils/favorites';
+import { sortFavorites } from '../utils/favorites';
 import { describeFilter } from '../utils/filterTree';
 
 interface Props {
@@ -27,6 +28,9 @@ interface Props {
   canSave: boolean;
   onSaveCurrent: () => void;
   onOpen: (f: FavoriteEntry) => void;
+  // 设为默认视图 / 置顶：老手常用的那一条不该每次都去翻
+  onSetDefault: (id: string, on: boolean) => void;
+  onTogglePin: (id: string) => void;
   onRename: (id: string, name: string, note: string) => void;
   onDelete: (id: string) => void;
   onClear: () => void;
@@ -49,6 +53,8 @@ export default function FavoritesDrawer({
   canSave,
   onSaveCurrent,
   onOpen,
+  onSetDefault,
+  onTogglePin,
   onRename,
   onDelete,
   onClear,
@@ -116,7 +122,7 @@ export default function FavoritesDrawer({
       ) : (
         <List
           size="small"
-          dataSource={favorites}
+          dataSource={sortFavorites(favorites)}
           renderItem={(f) => {
             const ds = datasets.find((d) => d.dataset_key === f.datasetKey);
             const missing = !ds;
@@ -132,6 +138,26 @@ export default function FavoritesDrawer({
                   <Button key="open" size="small" type="link" disabled={missing} onClick={() => onOpen(f)}>
                     打开
                   </Button>,
+                  <Tooltip key="def" title={f.isDefault ? '取消默认视图' : '打开这个数据集时自动跑它'}>
+                    <Button
+                      size="small"
+                      type="text"
+                      disabled={missing}
+                      style={{ color: f.isDefault ? '#faad14' : undefined }}
+                      onClick={() => onSetDefault(f.id, !f.isDefault)}
+                    >
+                      {f.isDefault ? '取消默认' : '设为默认'}
+                    </Button>
+                  </Tooltip>,
+                  <Tooltip key="pin" title={f.pinned ? '取消置顶' : '置顶'}>
+                    <Button
+                      size="small"
+                      type="text"
+                      style={{ color: f.pinned ? '#1677ff' : undefined }}
+                      icon={<PushpinOutlined />}
+                      onClick={() => onTogglePin(f.id)}
+                    />
+                  </Tooltip>,
                   <Tooltip key="edit" title="改名 / 备注">
                     <Button size="small" type="text" icon={<EditOutlined />} onClick={() => startEdit(f)} />
                   </Tooltip>,
@@ -151,6 +177,8 @@ export default function FavoritesDrawer({
                     <Space size={6} wrap>
                       <span>{f.name}</span>
                       {f.id === activeId && <Tag color="blue">当前</Tag>}
+                      {f.isDefault && <Tag color="gold">默认视图</Tag>}
+                      {f.pinned && <Tag color="blue">置顶</Tag>}
                       {f.compare && <Tag color="purple">{f.compare.mode === 'prev_year' ? '同比' : '环比'}</Tag>}
                       {missing && <Tag color="red">数据集已不可见</Tag>}
                     </Space>

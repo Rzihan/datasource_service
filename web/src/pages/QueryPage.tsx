@@ -4,6 +4,7 @@ import {
   App,
   Button,
   Card,
+  Checkbox,
   Col,
   Drawer,
   Empty,
@@ -60,6 +61,8 @@ import {
   removeFavorite,
   renameFavorite,
   saveFavorite,
+  setDefaultFavorite,
+  togglePinFavorite,
 } from '../utils/favorites';
 import { subscribeTenants } from '../identity';
 import { usePrefs } from '../utils/prefs';
@@ -112,6 +115,7 @@ export default function QueryPage() {
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [saveNote, setSaveNote] = useState('');
+  const [saveAsDefault, setSaveAsDefault] = useState(false);
   // 数据集体检报告：选完数据集就异步扫一次，不阻塞查询
   const [stats, setStats] = useState<DatasetStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
@@ -226,6 +230,16 @@ export default function QueryPage() {
       const key = sp.get('ds') ?? '';
       const ds = items.find((d) => d.dataset_key === key);
       if (!ds) return;
+      const intent = parseIntent(ds, sp);
+      // 链接里写明了要看什么就以链接为准；只给了数据集（或什么都没有）时，
+      // 用我自己的默认视图——分享出去的链接必须能还原，这是更强的约定。
+      if (intent.dims.length === 0 && intent.metrics.length === 0) {
+        const fav = loadFavorites().find((f) => f.datasetKey === key && f.isDefault);
+        if (fav) {
+          applyFavorite(fav, items);
+          return;
+        }
+      }
       applyIntent(ds, sp);
     },
     // applyIntent 每次渲染都是新的（它读的是当前状态），这里只依赖 execute：
@@ -316,6 +330,9 @@ export default function QueryPage() {
     setResult(null);
     setError('');
     setDimValues({});
+    // 有默认视图就直接跑：作者的建议挂在数据集上（预置分析），
+    // 我自己的分析也应该能挂上去（默认视图），而且优先级更高。
+    openDatasetWithDefault(key);
   };
 
   // 数据集的规模与新鲜度：选完就扫，切换就换。
@@ -489,6 +506,8 @@ export default function QueryPage() {
 
   const currentSig = favoriteSignature(currentSnapshot());
   const currentFavorite = favorites.find((f) => favoriteSignature(f) === currentSig);
+  // 这个数据集的默认视图：打开数据集时会自动跑它，所以要让用户看得见、能取消
+  const defaultFav = favorites.find((f) => f.datasetKey === selectedKey && f.isDefault);
 
   // 默认名：数据集 + 维度 + 指标。用户多半会改，但有个能用的起点比空着强——
   // 空着的话收藏夹里会躺一堆「未命名」。
@@ -508,25 +527,32 @@ export default function QueryPage() {
     if (!selectedKey) return;
     setSaveName(suggestedName());
     setSaveNote('');
+    // 这个数据集还没有默认视图时，默认勾上：第一次收藏多半就是「我以后就按这个看」
+    setSaveAsDefault(!loadFavorites().some((f) => f.datasetKey === selectedKey && f.isDefault));
     setSaveOpen(true);
   };
 
   const doSave = () => {
     const name = saveName.trim() || suggestedName();
     setFavorites(
-      saveFavorite({ ...currentSnapshot(), name, note: saveNote.trim() || undefined }),
+      saveFavorite({
+        ...currentSnapshot(),
+        name,
+        note: saveNote.trim() || undefined,
+        isDefault: saveAsDefault,
+      }),
     );
     setSaveOpen(false);
-    message.success(`已收藏「${name}」`);
+    message.success(saveAsDefault ? `已收藏「${name}」，并设为该数据集的默认视图` : `已收藏「${name}」`);
   };
 
-  const openFavorite = (f: FavoriteEntry) => {
-    const ds = datasets.find((d) => d.dataset_key === f.datasetKey);
-    if (!ds) {
-      message.warning('该数据集已不可见或已删除，无法打开');
-      return;
-    }
-    setFavOpen(false);
+  // 应用一条收藏：打开、置为默认视图后自动跑，都走这里。
+  // 分出一个不带「关抽屉」的版本，是为了让默认视图在页面加载时也能复用同一套动作。
+  // items 可以显式传入：首次加载时数据集列表刚取回来、还没进 state，
+  // 直接用 state 会拿到空数组，导致默认视图静默不生效。
+  const applyFavorite = (f: FavoriteEntry, items?: QueryDataset[]) => {
+    const ds = (items ?? datasets).find((d) => d.dataset_key === f.datasetKey);
+    if (!ds) return false;
     setSelectedKey(f.datasetKey);
     setDims(f.dims);
     setMetrics(f.metrics);
@@ -544,6 +570,26 @@ export default function QueryPage() {
       limit: f.limit,
       compare: f.compare ?? null,
     });
+    return true;
+  };
+
+  const openFavorite = (f: FavoriteEntry) => {
+    if (!applyFavorite(f)) {
+      message.warning('该数据集已不可见或已删除，无法打开');
+      return;
+    }
+    setFavOpen(false);
+  };
+
+  // 打开数据集时自动跑默认视图。
+  // URL 里带了 dims/metrics 就以链接为准——分享出去的链接必须能还原，
+  // 这是比「我想看默认视图」更强的约定。
+  const defaultFavoriteFor = (key: string): FavoriteEntry | undefined =>
+    loadFavorites().find((f) => f.datasetKey === key && f.isDefault);
+
+  const openDatasetWithDefault = (key: string, items?: QueryDataset[]) => {
+    const fav = defaultFavoriteFor(key);
+    if (fav) applyFavorite(fav, items);
   };
 
   const copyLink = async () => {
@@ -721,6 +767,21 @@ export default function QueryPage() {
               </Button>
             </Space>
           )}
+          {defaultFav && (
+            <Space size={6} style={{ marginBottom: 10 }}>
+              <Tag color="gold">默认视图：{defaultFav.name}</Tag>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                打开这个数据集会自动跑这条
+              </Typography.Text>
+              <Button
+                type="link"
+                size="small"
+                onClick={() => setFavorites(setDefaultFavorite(defaultFav.id, false))}
+              >
+                取消默认
+              </Button>
+            </Space>
+          )}
           {/* 0 行时只留上面的诊断：再摆一张空表和 0 值指标卡，只是把同一句话抄三遍 */}
           {!(result && result.rows.length === 0) && (
           <ResultView
@@ -762,6 +823,11 @@ export default function QueryPage() {
         canSave={!!selectedKey}
         onSaveCurrent={openSaveModal}
         onOpen={openFavorite}
+        onSetDefault={(id, on) => {
+          setFavorites(setDefaultFavorite(id, on));
+          message.success(on ? '已设为默认视图：打开数据集会直接跑这条' : '已取消默认视图');
+        }}
+        onTogglePin={(id) => setFavorites(togglePinFavorite(id))}
         onRename={(id, name, note) => {
           setFavorites(renameFavorite(id, { name, note: note || undefined }));
           message.success('已更新');
@@ -796,6 +862,13 @@ export default function QueryPage() {
             maxLength={120}
             onChange={(e) => setSaveNote(e.target.value)}
           />
+          <Checkbox
+            checked={saveAsDefault}
+            onChange={(e) => setSaveAsDefault(e.target.checked)}
+            style={{ fontSize: 13 }}
+          >
+            设为该数据集的默认视图（以后打开数据集直接跑这条）
+          </Checkbox>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             存的是「数据集 + 维度 + 指标 + 筛选 + 排序 + 对比周期」这一整套，打开时按当前字段重新校验。
           </Typography.Text>
