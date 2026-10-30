@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import dayjs from 'dayjs';
 import type { RefObject } from 'react';
 import {
   Alert,
@@ -57,11 +58,23 @@ const KIND_LABEL: Record<ChartKind, string> = {
   pie: '饼图',
 };
 
+// 导出时写进文件头的「口径」。数据一旦离开页面就失去了上下文，
+// 只给一列数字的 CSV，收件人无法判断它筛的是哪段时间、哪个渠道。
+export interface ExportMeta {
+  dataset: string;
+  dims: string[];
+  metrics: string[];
+  filterText: string;
+  orderText: string;
+  limit: number;
+}
+
 interface Props {
   result: QueryResult | null;
   dims: string[];
   metrics: string[];
   labelMap: StringMap;
+  exportMeta: ExportMeta;
 }
 
 // 表头显示中文含义，原始字段名收进 Tooltip，方便对照 SQL 和下游对接
@@ -100,7 +113,7 @@ function csvCell(v: unknown): string {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export default function ResultView({ result, dims, metrics, labelMap }: Props) {
+export default function ResultView({ result, dims, metrics, labelMap, exportMeta }: Props) {
   const { message } = App.useApp();
   // 默认落在表格：查数首先是要看到数，图只是可选的呈现方式。
   const [tab, setTab] = useState<TabKey>('table');
@@ -293,6 +306,20 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     return rows;
   }, [result, resolvedX, colNames, xIsTemporal, derivedData]);
 
+  const exportRows = useMemo(() => {
+    const rows = [...dataSource];
+    if (!sortInfo) return rows;
+    const isDerived = sortInfo.key.startsWith('d');
+    const idx = Number(sortInfo.key.slice(1));
+    rows.sort((a, b) => {
+      let r: number;
+      if (isDerived) r = ((a[sortInfo.key] as number | null) ?? -Infinity) - ((b[sortInfo.key] as number | null) ?? -Infinity);
+      else r = compareAt(idx, a, b);
+      return sortInfo.order === 'ascend' ? r : -r;
+    });
+    return rows;
+  }, [dataSource, sortInfo, compareAt]);
+
   // 智能推荐：只看「结果长什么样」，与后端无关，纯前端推导。
   // 它只影响 tab 上的「推荐」标记，不会自动切走用户当前所在的 tab。
   const shape = useMemo(
@@ -379,17 +406,41 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
   // 纯前端导出：数据已经在内存里了，不需要后端再给一个导出接口
   const downloadCSV = () => {
     if (!result) return;
-    const head = result.columns.map((c) => csvCell(c.name)).join(',');
-    const body = result.rows.map((r) => r.map(csvCell).join(','));
     const stamp = dayjs().format('YYYYMMDD-HHmm');
+    // 文件头写口径：这一份数据是怎么筛出来的，离开页面也说得清。
+    // 用 # 开头，肉眼一眼能分出元信息；Excel / pandas 打开也不会丢。
+    const meta = [
+      `# 数据集：${exportMeta.dataset}`,
+      `# 维度：${exportMeta.dims.join('、') || '无（汇总）'}`,
+      `# 指标：${exportMeta.metrics.join('、') || '无'}`,
+      `# 筛选：${exportMeta.filterText || '无'}`,
+      `# 排序：${exportMeta.orderText} · 返回上限 ${exportMeta.limit} 行`,
+      `# 导出时间：${dayjs().format('YYYY-MM-DD HH:mm')} · 共 ${result.row_count} 行${
+        result.truncated ? '（结果已截断，不是全量）' : ''
+      }`,
+      ...(derived.length > 0 ? [`# 计算列：${derived.map((d) => `${d.name} = ${d.expr}`).join('；')}`] : []),
+    ];
+    const head = [...result.columns.map((c) => csvCell(c.name)), ...derived.map((d) => csvCell(d.name))].join(',');
+    // 导出的行序 = 当前表格的顺序（含表头排序），而不是后端返回顺序
+    const body = exportRows.map((row) => {
+      const base = result.columns.map((_, i) => csvCell(row[`c${i}`]));
+      // 计算列保留 4 位：它是前端算出来的 float，原样导出会出现 0.04756712330684366 这种噪声
+      const extra = derived.map((_, di) => {
+        const v = row[`d${di}`] as number | null | undefined;
+        return v === null || v === undefined ? '' : csvCell(v.toFixed(4));
+      });
+      return [...base, ...extra].join(',');
+    });
     // BOM：不加的话 Excel 打开中文会乱码
-    const blob = new Blob(['﻿' + [head, ...body].join('\r\n')], {
+    const blob = new Blob(['﻿' + [...meta, '', head, ...body].join('\r\n')], {
       type: 'text/csv;charset=utf-8',
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `query-result-${Date.now()}.csv`;
+    // 文件名自带数据集与时间：多人互传时不用再猜「query-result-1730」是哪份
+    const safe = (t: string) => t.replace(/[\\/:*?"<>|\s]+/g, '');
+    a.download = `${safe(exportMeta.dataset.split(' · ')[0]) || 'query'}_${safe(exportMeta.dims.join('-')) || '汇总'}_${stamp}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -437,7 +488,7 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
     }
     const a = document.createElement('a');
     a.href = canvas.toDataURL('image/png');
-    a.download = `chart-${Date.now()}.png`;
+    a.download = `chart_${dayjs().format('YYYYMMDD-HHmm')}.png`;
     a.click();
   };
 
@@ -543,15 +594,16 @@ export default function ResultView({ result, dims, metrics, labelMap }: Props) {
           </Typography.Text>
           {result.truncated && <Tag color="warning">结果已截断至上限</Tag>}
         </Space>
-        <Button size="small" icon={<DownloadOutlined />} onClick={downloadCSV}>
-          下载 CSV
-        </Button>
         <Space size={8}>
           <Tooltip title="用已有列做四则运算，生成 CPC 之类的比率指标">
             <Button size="small" icon={<FunctionOutlined />} onClick={() => setDerivedOpen(true)}>
               计算列
             </Button>
           </Tooltip>
+          <Button size="small" icon={<DownloadOutlined />} onClick={downloadCSV}>
+            下载 CSV
+          </Button>
+        </Space>
       </Space>
 
       {recommendation && (

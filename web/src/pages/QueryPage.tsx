@@ -344,9 +344,25 @@ export default function QueryPage() {
               description={error}
             />
           )}
-          <ResultView result={result} dims={dims} metrics={metrics} labelMap={selected?.label_map ?? {}} />
+          <ResultView
+            result={result}
+            dims={dims}
+            metrics={metrics}
+            labelMap={selected?.label_map ?? {}}
+            exportMeta={{
+              dataset: selected ? `${selected.dataset_key} · ${selected.dataset_name}` : selectedKey,
+              dims: dims.map((d) => labelOf(selectedKey)(d)),
+              metrics: metrics.map((m) => labelOf(selectedKey)(m)),
+              filterText: describeFilter(pruneEmpty(filterTree), labelOf(selectedKey)),
+              orderText: orderBy
+                ? `${labelOf(selectedKey)(orderBy.field)} ${orderBy.desc ? '降序' : '升序'}`
+                : '默认（第一个指标降序）',
+              limit,
+            }}
+          />
         </Card>
       </Col>
+
       <Drawer
         title="查询历史"
         width={460}
