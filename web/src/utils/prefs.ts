@@ -15,6 +15,8 @@ export interface UIPrefs {
   density: Density;
   // 构建器「高级区」的手动开合状态。留空表示跟随档位（简洁档收起、完整档展开）。
   advancedOpen?: boolean;
+  // 结果表格的紧凑行高。同样留空表示跟随档位。
+  tableDense?: boolean;
 }
 
 const KEY = 'ds_ui_prefs';
@@ -29,6 +31,7 @@ function load(): UIPrefs {
     return {
       density: raw.density === 'compact' ? 'compact' : 'full',
       advancedOpen: typeof raw.advancedOpen === 'boolean' ? raw.advancedOpen : undefined,
+      tableDense: typeof raw.tableDense === 'boolean' ? raw.tableDense : undefined,
     };
   } catch {
     return { ...DEFAULT };

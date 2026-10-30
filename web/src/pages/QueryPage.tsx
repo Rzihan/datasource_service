@@ -65,7 +65,7 @@ import {
   togglePinFavorite,
 } from '../utils/favorites';
 import { subscribeTenants } from '../identity';
-import { usePrefs } from '../utils/prefs';
+import { setPrefs, usePrefs } from '../utils/prefs';
 
 // 一次查询的完整输入。抽成对象是为了两件事：
 //   1. 从 URL 恢复时要拿「刚解析出来的值」直接查，不能等 setState 生效；
@@ -793,6 +793,8 @@ export default function QueryPage() {
             onLimitChange={setLimitAndQuery}
             onDrill={drillInto}
             compact={compact}
+            tableDense={prefs.tableDense ?? compact}
+            onTableDenseChange={(v) => setPrefs({ tableDense: v })}
             emptyHint={
               !compact && (selected?.meta?.examples?.length ?? 0) > 0
                 ? `或直接从左侧「作者预置的分析」里挑一个（${selected?.meta?.examples?.length} 个）`

@@ -5,10 +5,12 @@ import {
   Alert,
   App,
   Button,
+  Checkbox,
   Col,
   Empty,
   Row,
   Modal,
+  Dropdown,
   Segmented,
   Skeleton,
   Space,
@@ -92,6 +94,9 @@ interface Props {
   // 简洁档：收起所有「教你读图」的东西（推荐用哪种图、推荐角标、下钻提示、
   // 分面与量级的解释）。这些都是给第一次看的人写的，熟练用户只会觉得吵。
   compact?: boolean;
+  // 表格紧凑行高 / 列显隐的偏好读写口：偏好是全局的，组件不该自己去碰 localStorage
+  tableDense?: boolean;
+  onTableDenseChange?: (v: boolean) => void;
 }
 
 // 表头显示中文含义，原始字段名收进 Tooltip，方便对照 SQL 和下游对接
@@ -189,6 +194,8 @@ export default function ResultView({
   onDrill,
   emptyHint,
   compact,
+  tableDense,
+  onTableDenseChange,
 }: Props) {
   const { message } = App.useApp();
   // 默认落在表格：查数首先是要看到数，图只是可选的呈现方式。
@@ -239,6 +246,14 @@ export default function ResultView({
     [columnMeta],
   );
 
+  // 隐藏哪些列：换一次查询就重置——新结果的列名跟旧的没关系，
+  // 留着旧的隐藏列表会出现「我明明选了指标却看不到列」这种鬼故事。
+  const [hiddenCols, setHiddenCols] = useState<string[]>([]);
+  const colSignature = columnMeta.map((m) => m.name).join('|');
+  useEffect(() => {
+    setHiddenCols([]);
+  }, [colSignature]);
+  const hiddenNames = useMemo(() => new Set(hiddenCols), [hiddenCols]);
   const columns = useMemo(() => {
     return columnMeta.map((m, i) => ({
       title: columnTitle(m.name, labelMap),
@@ -988,9 +1003,65 @@ export default function ResultView({
             key: 'table',
             label: tabLabel('table'),
             children: (
+              <div>
+              <Space size={8} style={{ marginBottom: 8 }} wrap>
+                <Dropdown
+                  trigger={['click']}
+                  placement="bottomLeft"
+                  popupRender={() => (
+                    <div
+                      style={{
+                        background: '#fff',
+                        borderRadius: 8,
+                        boxShadow: '0 6px 16px rgba(0,0,0,0.08), 0 3px 6px -4px rgba(0,0,0,0.12)',
+                        padding: 12,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, color: 'rgba(0,0,0,0.45)', marginBottom: 6 }}>显示的列</div>
+                      <Checkbox.Group
+                        style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
+                        value={columnMeta.map((m) => m.name).filter((n) => !hiddenCols.includes(n))}
+                        onChange={(vals) =>
+                          setHiddenCols(
+                            columnMeta.map((m) => m.name).filter((n) => !(vals as string[]).includes(n)),
+                          )
+                        }
+                        options={columnMeta.map((m) => ({
+                          value: m.name,
+                          label: labelMap[m.name] ? `${labelMap[m.name]}（${m.name}）` : m.name,
+                        }))}
+                      />
+                      {hiddenCols.length > 0 && (
+                        <Button type="link" size="small" style={{ paddingInline: 0, marginTop: 6 }} onClick={() => setHiddenCols([])}>
+                          全部显示
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                >
+                  <Button size="small">
+                    列 {columnMeta.length - hiddenCols.length}/{columnMeta.length}
+                    {hiddenCols.length > 0 ? ' · 已隐藏' : ''}
+                  </Button>
+                </Dropdown>
+                <Button size="small" onClick={() => onTableDenseChange?.(!tableDense)}>
+                  {tableDense ? '宽松行高' : '紧凑行高'}
+                </Button>
+                {hiddenCols.length > 0 && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    隐藏的列仍会写进导出的 CSV
+                  </Typography.Text>
+                )}
+              </Space>
               <Table
-                size="small"
-                columns={[...columns, ...derivedColumns, ...compareColumns]}
+                size={tableDense ? 'small' : 'middle'}
+                columns={[
+                  // 基础列按「列名」过滤：列的 key 是 c0/c1…，跟着结果下标走，
+                  // 而用户心里记住的是「藏掉 firmware 这一列」。
+                  ...columns.filter((_, i) => !hiddenNames.has(columnMeta[i]?.name ?? '')),
+                  ...derivedColumns,
+                  ...compareColumns,
+                ]}
                 dataSource={dataSource}
                 scroll={{ x: 'max-content' }}
                 summary={() => summaryRow}
@@ -1006,6 +1077,7 @@ export default function ResultView({
                   showTotal: (t) => `共 ${t} 行`,
                 }}
               />
+              </div>
             ),
           },
           ...CHART_TABS.map((t) => ({
