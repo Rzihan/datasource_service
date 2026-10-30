@@ -96,6 +96,7 @@ func (s *DatasetService) Create(ctx context.Context, req *model.CreateRequest, o
 		MtxMap:      mtxMap,
 		LabelMap:    labelMap,
 		ACL:         acl,
+		Meta:        metaFrom(req.Meta),
 		Status:      status,
 		Version:     0,
 		CreatedBy:   operator,
@@ -196,6 +197,15 @@ func (s *DatasetService) Update(ctx context.Context, key string, req *model.Upda
 		}
 	}
 
+	// 没传说明书就沿用原值：配置页保存时不该顺手把别人写的口径清空。
+	// 只有显式传了 meta 才覆盖（传 {} 就是「清空」）。
+	meta := model.DatasetMeta{}
+	if req.Meta != nil {
+		meta = normalizeMeta(*req.Meta)
+	} else if cur, err := s.repo.GetByKey(ctx, key); err == nil {
+		meta = cur.Meta
+	}
+
 	m := &model.DatasetConfig{
 		DatasetKey:  key,
 		DatasetName: name,
@@ -205,6 +215,7 @@ func (s *DatasetService) Update(ctx context.Context, key string, req *model.Upda
 		MtxMap:      mtxMap,
 		LabelMap:    labelMap,
 		ACL:         acl,
+		Meta:        meta,
 		Status:      status,
 		UpdatedBy:   operator,
 	}
@@ -617,4 +628,55 @@ func normalizeStringMap(m map[string]string, field string) (map[string]string, e
 		out[kk] = v
 	}
 	return out, nil
+}
+
+// metaFrom 请求里带了说明书就规范化一份，没带就是空（新建时即「暂无说明书」）。
+// 更新场景不走这里——那里要区分「没传」与「传了空」，见 Update。
+func metaFrom(m *model.DatasetMeta) model.DatasetMeta {
+	if m == nil {
+		return model.DatasetMeta{}
+	}
+	return normalizeMeta(*m)
+}
+
+// normalizeMeta 收敛用户填的说明书：去掉首尾空白、丢掉空条目。
+// 不做格式校验——它只影响提示文案，写错了顶多是「说明不准」，
+// 不像 map 写错会让整条查询报错，没必要在这里卡住用户。
+func normalizeMeta(m model.DatasetMeta) model.DatasetMeta {
+	out := model.DatasetMeta{
+		Description: strings.TrimSpace(m.Description),
+		Owner:       strings.TrimSpace(m.Owner),
+		UpdateFreq:  strings.TrimSpace(m.UpdateFreq),
+	}
+	for _, t := range m.Tags {
+		if t = strings.TrimSpace(t); t != "" {
+			out.Tags = append(out.Tags, t)
+		}
+	}
+	notes := make(map[string]string, len(m.FieldNotes))
+	for k, v := range m.FieldNotes {
+		if k = strings.TrimSpace(k); k == "" {
+			continue
+		}
+		if v = strings.TrimSpace(v); v == "" {
+			continue
+		}
+		notes[k] = v
+	}
+	if len(notes) > 0 {
+		out.FieldNotes = notes
+	}
+	for _, e := range m.Examples {
+		title := strings.TrimSpace(e.Title)
+		query := strings.TrimSpace(e.Query)
+		if title == "" || query == "" {
+			continue
+		}
+		out.Examples = append(out.Examples, model.MetaExample{
+			Title: title,
+			Note:  strings.TrimSpace(e.Note),
+			Query: query,
+		})
+	}
+	return out
 }

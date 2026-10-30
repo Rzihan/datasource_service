@@ -104,6 +104,8 @@ func (s *Service) VisibleDatasets(ctx context.Context, tenants []string) ([]Quer
 			// 以 dim_map / multi_dim_map / mtx_map 为准而不是以 label_map 为准，
 			// 否则数据集里已经删掉的列、或全局字典里跟本数据集无关的字段都会混进表头。
 			LabelMap: mergeLabels(dims, multiDims, mtxs, it.LabelMap, global),
+			// 说明书原样下发给查询页：里面没有权限信息，字段名也已经是过滤后的键
+			Meta: it.Meta,
 		})
 	}
 	return out, nil

@@ -47,10 +47,41 @@ export default function QueryBuilder(props: Props) {
   const labelMap = selected?.label_map ?? {};
   const optionLabel = (k: string) => (labelMap[k] ? `${labelMap[k]}（${k}）` : k);
 
+  // 数据集作者写的字段口径说明。查询页最常被问的「这个数是含税还是不含税」
+  // 就靠它回答——写在数据集里，比写在 wiki 里被看到的机会大得多。
+  const fieldNotes = selected?.meta?.field_notes ?? {};
+  const noteOf = (k: string) => fieldNotes[k] ?? '';
+
+  // 搜索要同时命中中文名、字段名和口径说明：
+  // 用户可能记得「通过率」，也可能只记得「一次通过」。
+  const matchField = (input: string, key: string) => {
+    const q = input.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      key.toLowerCase().includes(q) ||
+      (labelMap[key] ?? '').toLowerCase().includes(q) ||
+      (fieldNotes[key] ?? '').toLowerCase().includes(q)
+    );
+  };
+
+  // 每个选项两行：第一行是名字，第二行是口径说明（没有说明就不第二行）。
+  // 下拉里直接看到单位与公式，比选完再去别处查文档省事。
+  const renderOption = (option: { label?: unknown; value?: string | number }) => {
+    const key = String(option.value ?? '');
+    const note = noteOf(key);
+    return (
+      <div style={{ paddingBlock: 2 }}>
+        <div>{option.label as React.ReactNode}</div>
+        {note && (
+          <div style={{ fontSize: 12, color: '#8c8c8c', lineHeight: 1.4, whiteSpace: 'normal' }}>{note}</div>
+        )}
+      </div>
+    );
+  };
+
   // 多值维度也出现在维度下拉里——它本来就是维度，只是取值有多个。
   // 给它一个「多值」标记，否则用户会困惑为什么这一列长得跟别的维度不一样。
   const multiDimKeys = new Set(Object.keys(selected?.multi_dim_map ?? {}));
-  const dimKeys = [...Object.keys(selected?.dim_map ?? {}), ...multiDimKeys].sort();
   const dimOptions = Object.keys(selected?.dim_map ?? {}).sort();
   const multiDimOptions = [...multiDimKeys].sort();
   const mtxOptions = Object.keys(selected?.mtx_map ?? {}).sort();
@@ -174,6 +205,11 @@ export default function QueryBuilder(props: Props) {
             label: `${d.dataset_key} · ${d.dataset_name}`,
           }))}
         />
+        {selected?.meta?.description && (
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '6px 0 0' }}>
+            {selected.meta.description}
+          </Typography.Paragraph>
+        )}
       </div>
 
       <div>
@@ -183,23 +219,43 @@ export default function QueryBuilder(props: Props) {
         <Select
           mode="multiple"
           style={{ width: '100%', marginTop: 4 }}
-          placeholder={selected ? '选择维度' : '请先选择数据集'}
+          placeholder={selected ? '选择维度（可搜索字段名或口径）' : '请先选择数据集'}
           disabled={!selected}
           value={dims}
           onChange={onDimsChange}
-          options={dimKeys.map((k) => ({
-            value: k,
-            label: multiDimKeys.has(k) ? (
-              <Space size={4}>
-                {optionLabel(k)}
-                <Tag color="purple" style={{ marginInlineEnd: 0 }}>
-                  多值
-                </Tag>
-              </Space>
-            ) : (
-              optionLabel(k)
-            ),
-          }))}
+          showSearch
+          filterOption={(input, option) =>
+            matchField(input, String((option as { value?: unknown } | undefined)?.value ?? ''))
+          }
+          optionRender={renderOption}
+          options={[
+            ...(dimOptions.length > 0
+              ? [
+                  {
+                    label: `维度（${dimOptions.length}）`,
+                    options: dimOptions.map((k) => ({ value: k, label: optionLabel(k) })),
+                  },
+                ]
+              : []),
+            ...(multiDimOptions.length > 0
+              ? [
+                  {
+                    label: `多值维度（${multiDimOptions.length}）· 收拢展示`,
+                    options: multiDimOptions.map((k) => ({
+                      value: k,
+                      label: (
+                        <Space size={4}>
+                          {optionLabel(k)}
+                          <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+                            多值
+                          </Tag>
+                        </Space>
+                      ),
+                    })),
+                  },
+                ]
+              : []),
+          ]}
         />
         {selectedMultiDims.length > 0 && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -218,11 +274,21 @@ export default function QueryBuilder(props: Props) {
         <Select
           mode="multiple"
           style={{ width: '100%', marginTop: 4 }}
-          placeholder={selected ? '选择指标' : '请先选择数据集'}
+          placeholder={selected ? '选择指标（可搜索字段名或口径）' : '请先选择数据集'}
           disabled={!selected}
           value={metrics}
           onChange={handleMetricsChange}
-          options={mtxOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
+          showSearch
+          filterOption={(input, option) =>
+            matchField(input, String((option as { value?: unknown } | undefined)?.value ?? ''))
+          }
+          optionRender={renderOption}
+          options={[
+            {
+              label: `指标（${mtxOptions.length}）`,
+              options: mtxOptions.map((k) => ({ value: k, label: optionLabel(k) })),
+            },
+          ]}
         />
       </div>
 

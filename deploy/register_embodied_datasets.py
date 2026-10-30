@@ -115,6 +115,165 @@ GLOBAL_LABELS = {
     "gross_margin": "毛利率(%)",
 }
 
+
+# ---------------------------------------------------------------------------
+# 数据集说明书（meta）。
+#
+# 数据集交给别人用之后，被问得最多的不是「怎么查」，而是三个问题：
+#   这个数是什么口径？多久更新一次？出问题找谁？
+# 以前靠嘴传，现在写进 meta，查询页会显示在字段下拉和结果区顶部。
+#
+# field_notes 的 key 必须是 dim_map / mtx_map 的键名；
+# examples 里的 query 就是查询页地址栏里 ds 之后的那一段，
+# 直接照着一张搭好的图复制 URL 尾部即可，不用另写一套结构。
+# ---------------------------------------------------------------------------
+META = {
+    "robot_collection": {
+        "description": "数采环节逐条采集明细：谁、在哪、用什么机器人、采了多少、废了多少。适合看产能、有效率、设备和场景分布。",
+        "owner": "数采运营 · 王工",
+        "update_freq": "每日 06:00 增量（T+1）",
+        "tags": ["数采", "产能", "设备"],
+        "field_notes": {
+            "episodes": "采集条数，含被判废的条数；按条统计，不是按帧",
+            "valid_episodes": "通过质检的有效条数 = episodes - 废片",
+            "valid_rate": "有效条数 / 采集条数（%）。分母用条数不是工时，所以不能和产能直接比较",
+            "storage_gb": "按 RGB-D 约 25KB/帧估算的压缩后大小，不是磁盘实测值",
+            "total_hours": "采集工时（小时），已按班次折算",
+            "per_person": "人均日产出 = 采集条数 / 在岗人数",
+            "avg_duration": "单条平均时长（秒）",
+            "avg_quality": "单条质量分均值，0~100，低于 70 会被判废",
+            "reject_reason": "判废原因；有效条为空",
+        },
+        "examples": [
+            {
+                "title": "每日采集量与有效率",
+                "note": "看整体节拍和周末峰谷；有效率掉到 88% 以下要查判废原因",
+                "query": "dims=date&metrics=episodes,valid_rate&limit=1000",
+            },
+            {
+                "title": "各任务场景产出对比",
+                "note": "16 个场景的产出分布，找出产能洼地",
+                "query": "dims=scene&metrics=episodes,valid_rate,avg_quality&limit=1000",
+            },
+            {
+                "title": "团队产能榜",
+                "note": "按团队看人均产出，用于排班与激励",
+                "query": "dims=team,collector&metrics=episodes,per_person&limit=200",
+            },
+        ],
+    },
+    "robot_annotation": {
+        "description": "标注环节逐单元产出明细：标注类型、标注员、一次通过率、返工与工时。适合看产能、质量与人员能力。",
+        "owner": "标注中心 · 李工",
+        "update_freq": "每日 07:00（T+1）",
+        "tags": ["标注", "质量", "产能"],
+        "field_notes": {
+            "units": "标注对象数（框 / 点 / 轨迹段），不是任务数——同一个任务里可能有几十个对象",
+            "pass_rate": "一次通过率（%）= 首次验收通过单元 / 提交单元；返工后的二次通过不计入",
+            "first_pass": "是否一次通过；用它筛出返工部分单独看",
+            "rework": "返工单元数，返工不减少 units，会增加 work_hours",
+            "work_hours": "标注工时（小时）",
+            "per_person": "人均日产出（标注对象数）",
+            "skill_tags": "多值维度：一个标注员可能同时具备多个技能标签，收拢展示",
+            "avg_accuracy": "抽检准确率均值（%），与 pass_rate 口径不同：后者是验收，前者是抽检",
+        },
+        "examples": [
+            {
+                "title": "各标注类型产能与通过率",
+                "note": "3D 框通常慢于 2D 框，通过率也低，排期要按类型分开估",
+                "query": "dims=anno_type&metrics=units,pass_rate,work_hours&limit=1000",
+            },
+            {
+                "title": "人员产能榜（近 7 天）",
+                "note": "人均产出前 20，用于排班",
+                "query": "dims=annotator&metrics=units,per_person,pass_rate&limit=20",
+            },
+        ],
+    },
+    "robot_qc": {
+        "description": "质检抽检明细：抽了多少、发现多少缺陷、判废多少、返修工时。适合看质量水位与缺陷分布。",
+        "owner": "质量部 · 张工",
+        "update_freq": "每日 08:00（T+1）",
+        "tags": ["质检", "质量"],
+        "field_notes": {
+            "samples": "抽检样本数；抽样比例约为上游产出的 13%",
+            "pass_samples": "抽检通过的样本数",
+            "pass_rate": "抽检通过率（%）= pass_samples / samples。样本是抽的，不是全检，不能当成整体合格率",
+            "defects": "发现的缺陷条数；一次抽检可能发现多个缺陷",
+            "scrap": "判废条数，会回写到数采 / 标注环节",
+            "repair_hours": "返修工时（小时）",
+            "stage": "被抽检的环节（数采 / 标注），看缺陷分布时先按环节过滤",
+        },
+        "examples": [
+            {
+                "title": "各环节抽检通过率趋势",
+                "note": "按日期看质量水位；标注环节通常低于数采",
+                "query": "dims=date,stage&metrics=samples,pass_rate&limit=1000",
+            },
+            {
+                "title": "标注环节缺陷 TOP",
+                "note": "只在标注环节里看缺陷类型分布，避免和数采的字典混在一起",
+                "query": "dims=defect_type&metrics=defects&filter=%7B%22logic%22%3A%22and%22%2C%22children%22%3A%5B%7B%22field%22%3A%22stage%22%2C%22op%22%3A%22%3D%22%2C%22value%22%3A%22%E6%A0%87%E6%B3%A8%22%7D%5D%7D&limit=20",
+            },
+        ],
+    },
+    "robot_business": {
+        "description": "商务环节项目级明细：合同、交付、收入、回款与账期。适合看客户结构、回款风险与毛利。",
+        "owner": "商务 · 陈经理",
+        "update_freq": "每日 09:00（T+1）",
+        "tags": ["商务", "回款", "客户"],
+        "field_notes": {
+            "revenue": "交付收入（元），按已交付条数 × 单价确认，不含税",
+            "contract": "本期新签合同额（元）",
+            "receivable": "应收金额（元）= 已到期应收，不含未到期部分",
+            "received": "已回款（元），含预付款与进度款",
+            "arrears": "欠款余额（元）= receivable - received，可能为负（预收）",
+            "payment_rate": "回款率（%）= received / receivable。只在 receivable > 0 时有意义",
+            "avg_price": "单价（元/条）= revenue / units_delivered",
+            "avg_term": "平均账期（天），合同约定",
+            "tier": "客户分层（战略 / KA / 一般），分层口径由商务维护",
+        },
+        "examples": [
+            {
+                "title": "客户收入与欠款",
+                "note": "按客户看收入和欠款余额，找出回款慢的大客户",
+                "query": "dims=customer&metrics=revenue,received,arrears&limit=50",
+            },
+            {
+                "title": "分层回款率与账期",
+                "note": "战略客户回款率明显高于一般客户，账期也更短",
+                "query": "dims=tier&metrics=revenue,payment_rate,avg_term&limit=20",
+            },
+        ],
+    },
+    "robot_pipeline": {
+        "description": "跨环节全流程视角：同一天里数采 / 标注 / 质检各产出了多少、通过率如何。适合做环节间对比，不适合跨环节求和。",
+        "owner": "数据平台 · 架构组",
+        "update_freq": "每日 09:30（汇总全链路）",
+        "tags": ["全流程", "产能"],
+        "field_notes": {
+            "output_units": "各环节的产出单元数。**环节之间口径不同**（条 / 标注对象 / 抽检样本），不要跨环节求和",
+            "tasks": "任务数（按环节定义不同）",
+            "pass_rate": "环节通过率（%）；分母是该环节的提交量",
+            "work_hours": "环节工时（小时），可跨环节相加",
+            "staff_cnt": "该环节当日参与人数（去重），不能跨环节相加",
+            "per_person": "人均产出，口径随环节变化",
+        },
+        "examples": [
+            {
+                "title": "各环节每日产出",
+                "note": "同一张图里对比三个环节的节拍；注意单位不同，看形状不看高低",
+                "query": "dims=date,stage&metrics=output_units,work_hours&limit=1000",
+            },
+            {
+                "title": "各环节通过率",
+                "note": "标注环节常年最低，是质量瓶颈",
+                "query": "dims=stage&metrics=output_units,pass_rate,work_hours&limit=20",
+            },
+        ],
+    },
+}
+
 # ---------------------------------------------------------------------------
 # 五个数据集。四个角色各一份，外加一份跨环节的全流程视角。
 # 所有口径都写在 mid_sql 里的 JOIN，前端拿到的永远是翻译好的中文名。
@@ -528,6 +687,7 @@ def upsert_dataset(ds: dict, update: bool) -> tuple[int, dict]:
         "multi_dim_map": ds.get("multi_dim_map", {}),
         "mtx_map": ds["mtx_map"],
         "acl": {},
+        "meta": META.get(key, {}),
     }
     if update:
         _, detail = get(f"/api/v1/datasets/{key}")

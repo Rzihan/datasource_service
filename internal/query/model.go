@@ -1,6 +1,10 @@
 package query
 
-import "strings"
+import (
+	"strings"
+
+	"dataset_service/internal/model"
+)
 
 // 允许的比较操作符白名单。过滤值一律走 ClickHouse 命名参数绑定，
 // 绝不做字符串拼接——这是整个查询功能唯一的注入面，必须堵死。
@@ -161,6 +165,9 @@ type QueryDataset struct {
 	MultiDimMap map[string]string `json:"multi_dim_map"`
 	MtxMap      map[string]string `json:"mtx_map"`
 	LabelMap    map[string]string `json:"label_map"`
+	// Meta 数据集说明书。查询页用它做三件事：字段下拉里的口径提示、
+	// 结果区顶部的「这个数据集是什么」、以及预置分析入口。
+	Meta model.DatasetMeta `json:"meta"`
 }
 
 // Column 结果列元信息。

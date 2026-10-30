@@ -87,6 +87,43 @@ func intersects(whitelist, tenants []string) bool {
 //     配合唯一索引 uk_dataset_key(dataset_key, deleted_at) 才能真正约束住。
 //  2. DimMap / MtxMap 是 map[string]string，GORM 序列化为 JSON 列。
 //     类型系统本身就是校验器：非字符串的值在反序列化时会被直接拒绝。
+//
+// DatasetMeta 数据集本身的「说明书」：谁维护、多久更新一次、每个字段什么口径。
+//
+// 刻意与 dim_map / mtx_map 分开存：
+//   - 前者决定「能不能查」，后者决定「敢不敢用」。混在一起会让配置页
+//     变成一坨，也会出现「为了补一句说明去改 SQL 配置」的荒唐操作。
+//   - 它不参与 SQL 生成，写错最多是提示不准，不至于把查询改坏。
+type DatasetMeta struct {
+	// Description 一句话说明这个数据集适合回答什么问题
+	Description string `json:"description,omitempty"`
+	// Owner 负责人（找谁问口径）
+	Owner string `json:"owner,omitempty"`
+	// UpdateFreq 更新频率的人类可读描述，如「每日 06:00」
+	UpdateFreq string `json:"update_freq,omitempty"`
+	// Tags 业务标签，用于列表页筛选
+	Tags []string `json:"tags,omitempty"`
+	// FieldNotes key 是 dim_map / mtx_map 的键，值是口径说明（单位、计算公式、注意事项）
+	FieldNotes map[string]string `json:"field_notes,omitempty"`
+	// Examples 预置分析：数据集的作者把「这张表该怎么用」直接钉在看板上
+	Examples []MetaExample `json:"examples,omitempty"`
+}
+
+// MetaExample 一条预置分析。
+//
+// 用「查询参数串」而不是结构化字段，是刻意的：
+//   - 查询页的状态本来就序列化在 URL 里，预置分析只是把那段串存下来，
+//     打开时原样拼回 /query 即可，不需要另一套还原逻辑；
+//   - 将来查询能力增加（新的操作符、对比周期……）预置分析自动支持，
+//     不用改这里的数据结构。
+//
+// Query 形如 "dims=date&metrics=episodes&filter=%7B...%7D&limit=1000"，不含 ds。
+type MetaExample struct {
+	Title string `json:"title"`
+	Note  string `json:"note,omitempty"`
+	Query string `json:"query"`
+}
+
 type DatasetConfig struct {
 	ID          uint64            `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
 	DatasetKey  string            `json:"dataset_key" gorm:"column:dataset_key;type:varchar(64);not null"`
@@ -108,14 +145,16 @@ type DatasetConfig struct {
 	// 只影响展示（勾选控件、表头），不参与 SQL 生成。
 	LabelMap map[string]string `json:"label_map" gorm:"column:label_map;type:json;serializer:json;not null"`
 	// ACL 数据集级访问控制，查询页按登录态租户与白名单取交集来判断可见性。
-	ACL       ACL       `json:"acl" gorm:"column:acl;type:json;serializer:json;not null"`
-	Status    int8      `json:"status" gorm:"column:status;type:tinyint;not null;default:1"`
-	Version   int       `json:"version" gorm:"column:version;type:int;not null;default:0"`
-	CreatedBy string    `json:"created_by" gorm:"column:created_by;type:varchar(64);not null;default:''"`
-	UpdatedBy string    `json:"updated_by" gorm:"column:updated_by;type:varchar(64);not null;default:''"`
-	CreatedAt time.Time `json:"created_at" gorm:"column:created_at;type:datetime(3);not null;autoCreateTime"`
-	UpdatedAt time.Time `json:"updated_at" gorm:"column:updated_at;type:datetime(3);not null;autoUpdateTime"`
-	DeletedAt int64     `json:"-" gorm:"column:deleted_at;type:bigint;not null;default:0"`
+	ACL ACL `json:"acl" gorm:"column:acl;type:json;serializer:json;not null"`
+	// Meta 数据集说明书：描述 / 负责人 / 更新频率 / 字段口径 / 预置分析
+	Meta      DatasetMeta `json:"meta" gorm:"column:meta;type:json;serializer:json;not null"`
+	Status    int8        `json:"status" gorm:"column:status;type:tinyint;not null;default:1"`
+	Version   int         `json:"version" gorm:"column:version;type:int;not null;default:0"`
+	CreatedBy string      `json:"created_by" gorm:"column:created_by;type:varchar(64);not null;default:''"`
+	UpdatedBy string      `json:"updated_by" gorm:"column:updated_by;type:varchar(64);not null;default:''"`
+	CreatedAt time.Time   `json:"created_at" gorm:"column:created_at;type:datetime(3);not null;autoCreateTime"`
+	UpdatedAt time.Time   `json:"updated_at" gorm:"column:updated_at;type:datetime(3);not null;autoUpdateTime"`
+	DeletedAt int64       `json:"-" gorm:"column:deleted_at;type:bigint;not null;default:0"`
 }
 
 // TableName 指定表名。
@@ -133,7 +172,10 @@ type CreateRequest struct {
 	MtxMap      map[string]string `json:"mtx_map"`
 	LabelMap    map[string]string `json:"label_map"`
 	ACL         ACL               `json:"acl"`
-	Status      *int8             `json:"status"`
+	// Meta 指针：不传 = 不修改。用值类型的话，老客户端（配置页保存）会把
+	// 已有说明书整段清空——「没说」和「说没有」必须是两件事。
+	Meta   *DatasetMeta `json:"meta,omitempty"`
+	Status *int8        `json:"status"`
 }
 
 // UpdateRequest 更新配置的请求体，Version 用于乐观锁。
@@ -145,6 +187,7 @@ type UpdateRequest struct {
 	MtxMap      map[string]string `json:"mtx_map"`
 	LabelMap    map[string]string `json:"label_map"`
 	ACL         ACL               `json:"acl"`
+	Meta        *DatasetMeta      `json:"meta,omitempty"`
 	Status      *int8             `json:"status"`
 	Version     int               `json:"version"`
 }

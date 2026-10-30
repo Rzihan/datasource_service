@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS `tb_dataset_config` (
   `mtx_map`         JSON          NOT NULL COMMENT '指标映射 map[string]string',
   `label_map`       JSON          NOT NULL DEFAULT (JSON_OBJECT()) COMMENT '维度/指标的中文含义，key 对应 dim_map/multi_dim_map/mtx_map 的键，仅影响展示',
   `acl`             JSON          NOT NULL DEFAULT (JSON_OBJECT()) COMMENT '访问控制，如 {"tenants":["t1"]}；tenants 缺省或为 [] 表示不限制',
+  `meta`            JSON          NOT NULL DEFAULT (JSON_OBJECT()) COMMENT '数据集说明书：描述/负责人/更新频率/字段口径/预置分析，不参与 SQL 生成',
   `status`          TINYINT       NOT NULL DEFAULT 1 COMMENT '1 启用 0 停用',
   `version`         INT           NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
   `created_by`      VARCHAR(64)   NOT NULL DEFAULT '' COMMENT '创建人',

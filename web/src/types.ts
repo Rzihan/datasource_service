@@ -29,6 +29,25 @@ export interface ACL {
   row_filter?: RowFilter;
 }
 
+// 预置分析：数据集作者把「这张表该怎么用」钉在看板上。
+// query 就是查询页地址栏里 ds 之后的那一段，前端拼回 /query 即可还原。
+export interface MetaExample {
+  title: string;
+  note?: string;
+  query: string;
+}
+
+// 数据集说明书。不参与 SQL 生成，只影响「看不看得懂、敢不敢用」。
+export interface DatasetMeta {
+  description?: string;
+  owner?: string;
+  update_freq?: string;
+  tags?: string[];
+  // key 是 dim_map / mtx_map 的键，值是口径说明（单位、公式、注意事项）
+  field_notes?: Record<string, string>;
+  examples?: MetaExample[];
+}
+
 // 查询页看到的数据集：刻意不含 mid_sql（用户不感知 SQL）与 acl。
 // dim_map / mtx_map 已按列级白名单过滤，看不到的列不会出现。
 export interface QueryDataset {
@@ -40,6 +59,7 @@ export interface QueryDataset {
   multi_dim_map: StringMap;
   mtx_map: StringMap;
   label_map: StringMap;
+  meta: DatasetMeta;
 }
 
 export interface DatasetConfig {
@@ -52,6 +72,7 @@ export interface DatasetConfig {
   mtx_map: StringMap;
   label_map: StringMap;
   acl: ACL;
+  meta: DatasetMeta;
   status: number;
   version: number;
   created_by: string;
@@ -76,6 +97,7 @@ export interface CreatePayload {
   mtx_map: StringMap;
   label_map: StringMap;
   acl: ACL;
+  meta?: DatasetMeta;
   status?: number;
 }
 

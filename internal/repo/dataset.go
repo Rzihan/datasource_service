@@ -124,7 +124,7 @@ func (r *DatasetRepo) Update(ctx context.Context, m *DatasetConfigModel, expecte
 	m.Version = expectedVersion + 1
 	res := r.db.WithContext(ctx).Model(&DatasetConfigModel{}).
 		Where("dataset_key = ? AND deleted_at = 0 AND version = ?", m.DatasetKey, expectedVersion).
-		Select("dataset_name", "mid_sql", "dim_map", "multi_dim_map", "mtx_map", "label_map", "acl", "status", "version", "updated_by", "updated_at").
+		Select("dataset_name", "mid_sql", "dim_map", "multi_dim_map", "mtx_map", "label_map", "acl", "meta", "status", "version", "updated_by", "updated_at").
 		Updates(m)
 	if res.Error != nil {
 		if isDuplicate(res.Error) {
