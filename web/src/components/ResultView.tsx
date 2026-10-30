@@ -5,7 +5,9 @@ import {
   Alert,
   App,
   Button,
+  Col,
   Empty,
+  Row,
   Modal,
   Segmented,
   Skeleton,
@@ -188,6 +190,9 @@ export default function ResultView({
   // 柱状图的排列方式。系列一多（比如 日期 × 渠道），分组柱会糊成一片，
   // 堆叠至少能回答「总量和构成」，所以给一个显式开关而不是替用户猜。
   const [stacked, setStacked] = useState(false);
+  // 多指标默认分面：「消耗」和「点击数」量级差三个数量级，画在一根 Y 轴上
+  // 必然有一条被压成贴着 X 轴的直线——图看着没错，其实什么都没说。
+  const [facet, setFacet] = useState(true);
   // 派生列：跟着这一次结果走，换查询就清空（列名可能完全不同）
   const [derived, setDerived] = useState<Array<{ name: string; expr: string; node: ExprNode }>>([]);
   const [derivedOpen, setDerivedOpen] = useState(false);
@@ -540,6 +545,31 @@ export default function ResultView({
     return { points: kept, series: names, seriesTruncated: truncated, xCount: new Set(kept.map((p) => p.x)).size };
   }, [result, colNames, resolvedX, resolvedYs, resolvedGroup, labelMap, xIsTemporal]);
 
+  // 分面：一个指标一格，各自一根 Y 轴。
+  // 这不是「多画几张图」，而是承认不同量纲的指标本来就画不到一张图上。
+  const facets = useMemo(() => {
+    if (!result || resolvedYs.length < 2) return [];
+    return resolvedYs.map((m) => {
+      const name = labelMap[m] || m;
+      const idx = colNames.indexOf(m);
+      const values = result.rows.map((r) => toNumber(r[idx])).filter((v): v is number => v !== null);
+      const total = values.reduce((a, b) => a + b, 0);
+      const points2 = points.filter((p) => p.series === name || p.series.endsWith(` · ${name}`));
+      const series2 = [...new Set(points2.map((p) => p.series))];
+      return {
+        metric: m,
+        title: name,
+        points: points2,
+        series: series2,
+        note: nonAdditive.includes(m)
+          ? `行均值 ${values.length > 0 ? (total / values.length).toFixed(2) : '—'}`
+          : `合计 ${total.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}`,
+      };
+    });
+  }, [result, resolvedYs, points, colNames, labelMap, nonAdditive]);
+
+  const useFacet = facet && facets.length > 1;
+
   // 某些图在当前字段组合下画不出来：直接把对应 tab 置灰并说明原因，
   // 而不是让用户点进去看到一张莫名其妙的图。
   // 堆叠只对「同一个指标按维度拆开」有意义。多个指标堆在一起是把
@@ -743,6 +773,17 @@ export default function ResultView({
           <Button size="small" icon={<DownloadOutlined />} onClick={downloadPng}>
             PNG
           </Button>
+          {type !== 'pie' && facets.length > 1 && (
+            <Segmented
+              size="small"
+              value={useFacet ? 'facet' : 'merge'}
+              onChange={(v) => setFacet(v === 'facet')}
+              options={[
+                { label: '分面', value: 'facet' },
+                { label: '合并', value: 'merge' },
+              ]}
+            />
+          )}
           {type === 'column' && canStack && (
             <Segmented
               size="small"
@@ -774,6 +815,15 @@ export default function ResultView({
             message="本次查询没有选维度，横轴按「汇总」展示各指标的值"
           />
         )}
+        {!useFacet && facets.length > 1 && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="多个指标画在同一根 Y 轴上时，量级小的那条会被压平"
+            description="切到「分面」可以让每个指标各用一根 Y 轴；要对比量级本身则保持合并。"
+          />
+        )}
         {seriesTruncated && (
           <Alert
             type="warning"
@@ -786,7 +836,42 @@ export default function ResultView({
 
         {series.length > 0 ? (
           <Suspense fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
-            {chartNode(chartBoxRef, 340, type)}
+            {useFacet ? (
+              <Row gutter={12}>
+                {facets.map((f) => (
+                  <Col key={f.metric} xs={24} lg={12}>
+                    <div
+                      style={{
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                        padding: '8px 10px 4px',
+                        marginBottom: 12,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                        <Typography.Text strong style={{ fontSize: 13 }}>
+                          {f.title}
+                        </Typography.Text>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {f.note}
+                        </Typography.Text>
+                      </div>
+                      <ChartView
+                        data={f.points}
+                        type={type}
+                        series={f.series}
+                        height={220}
+                        xCount={xCount}
+                        xLabel={resolvedX ? labelMap[resolvedX] || resolvedX : '汇总'}
+                        stacked={type === 'column' && f.series.length > 1 && stacked}
+                      />
+                    </div>
+                  </Col>
+                ))}
+              </Row>
+            ) : (
+              chartNode(chartBoxRef, 340, type)
+            )}
           </Suspense>
         ) : (
           <Empty description="画图需要至少一个指标，请在左侧勾选指标后重新查数" />

@@ -28,8 +28,8 @@ const DATE_RE = /^\d{4}-\d{2}(-\d{2})?([ T]\d{2}:\d{2}(:\d{2})?)?$/;
 function Sparkline({ values }: { values: Array<number | null> }) {
   const nums = values.filter((v): v is number => v !== null);
   if (nums.length < 3) return null;
-  const w = 108;
-  const h = 28;
+  const w = 64;
+  const h = 24;
   const min = Math.min(...nums);
   const max = Math.max(...nums);
   if (max === min) return null; // 一条直线没有信息量，别占地方
@@ -208,7 +208,14 @@ export default function MetricCards({ result, dims, metrics, labelMap, nonAdditi
                 >
                   {c.big}
                 </div>
-                {c.spark && <Sparkline values={c.spark} />}
+                {/* 数字太长、或卡片太窄时不给趋势线留位置：
+                    被压成「1,440 …」的卡片失去意义，趋势线本来只是辅助。
+                    四张卡并排时每张只有 150px，64px 的趋势线会把数字挤断。 */}
+                {c.spark && c.big.length <= 9 && cards.length <= 3 && (
+                  <div style={{ flexShrink: 0 }}>
+                    <Sparkline values={c.spark} />
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 {c.delta && (

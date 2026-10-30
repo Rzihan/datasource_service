@@ -75,7 +75,9 @@ export default function ChartView({
     title: xLabel || null,
     labelAutoRotate: false,
     labelAutoHide: true,
-    labelAutoHideGap: 8,
+    // 分面图只有半屏宽，同样的间距会让日期标签挤在一起；
+    // 矮图（分面）放宽间距，让 G2 主动少画几个
+    labelAutoHideGap: height < 260 ? 24 : 8,
     labelFormatter: shortAxisLabel,
   };
   const yAxis: Record<string, unknown> = {
