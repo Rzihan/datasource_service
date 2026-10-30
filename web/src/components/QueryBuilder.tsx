@@ -1,8 +1,11 @@
-import { App, Alert, Button, InputNumber, Select, Space, Tag, Typography } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { App, Alert, Button, DatePicker, InputNumber, Select, Space, Tag, Typography } from 'antd';
+import type { Dayjs } from 'dayjs';
+import dayjs from 'dayjs';
 import { ClearOutlined, SearchOutlined } from '@ant-design/icons';
 import type { FilterNode, OrderBy, QueryDataset } from '../types';
 import FilterTreeEditor from './FilterTreeEditor';
-import { countLeaves, emptyRoot, removeFields } from '../utils/filterTree';
+import { countLeaves, emptyRoot, findRange, removeFields, stripRange, withRange } from '../utils/filterTree';
 
 interface Props {
   datasets: QueryDataset[];
@@ -94,6 +97,64 @@ export default function QueryBuilder(props: Props) {
 
   const leafCount = countLeaves(filterTree);
 
+  // 时间范围：只在「看起来是日期」的维度存在时出现。
+  // 判断靠字段名/中文名，不猜值——候选值要发请求才有，为一屏控件多打一轮请求不值得。
+  const dateDimOptions = useMemo(() => {
+    const rx = /(^|_)(date|dt|day|ts|time)($|_)/i;
+    return dimOptions.filter((k) => rx.test(k) || /日期|时间|天/.test(labelMap[k] ?? ''));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, labelMap]);
+
+  const [rangeField, setRangeField] = useState('');
+  useEffect(() => {
+    if (dateDimOptions.length === 0) {
+      if (rangeField) setRangeField('');
+      return;
+    }
+    if (!dateDimOptions.includes(rangeField)) setRangeField(dateDimOptions[0]);
+  }, [dateDimOptions, rangeField]);
+
+  // 要知道数据最新到哪天：Relative「近 7 天」在 T+1 的数据上经常是空的，
+  // 用户需要看到「数据只到 X」而不是对着空结果怀疑自己。
+  useEffect(() => {
+    if (rangeField) onRequestDimValues(rangeField);
+  }, [rangeField, onRequestDimValues]);
+
+  const dataDates = (dimValues[rangeField] ?? []).filter((v) => /^\d{4}-\d{2}-\d{2}$/.test(v));
+  const dataMax = dataDates.length > 0 ? dataDates[dataDates.length - 1] : '';
+
+  // 区间的唯一来源是条件树：清空条件、改条件都会同步反映到选择器上，
+  // 不会出现「控件显示着区间、实际没提交」的两套真相。
+  const range = rangeField ? findRange(filterTree, rangeField) : null;
+  const rangeValue: [Dayjs, Dayjs] | null =
+    range?.from && range.to ? [dayjs(range.from), dayjs(range.to)] : null;
+
+  const presets = useMemo(() => {
+    const now = dayjs();
+    const list: Array<{ label: string; value: [Dayjs, Dayjs] }> = [
+      { label: '近 7 天', value: [now.subtract(6, 'day'), now] },
+      { label: '近 30 天', value: [now.subtract(29, 'day'), now] },
+      { label: '本月', value: [now.startOf('month'), now] },
+    ];
+    if (dataMax && dataMax !== now.format('YYYY-MM-DD')) {
+      const latest = dayjs(dataMax);
+      list.push({ label: '数据最近 7 天', value: [latest.subtract(6, 'day'), latest] });
+      list.push({ label: '数据最近 30 天', value: [latest.subtract(29, 'day'), latest] });
+    }
+    return list;
+  }, [dataMax]);
+
+  const applyRange = (next: [Dayjs, Dayjs] | null) => {
+    if (!rangeField) return;
+    if (!next) {
+      onFilterTreeChange(stripRange(filterTree, rangeField) ?? emptyRoot());
+      return;
+    }
+    onFilterTreeChange(
+      withRange(filterTree, rangeField, next[0].format('YYYY-MM-DD'), next[1].format('YYYY-MM-DD')),
+    );
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div>
@@ -161,6 +222,41 @@ export default function QueryBuilder(props: Props) {
           options={mtxOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
         />
       </div>
+
+      {dateDimOptions.length > 0 && (
+        <div>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            时间范围
+          </Typography.Text>
+          <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Select
+              style={{ width: '100%' }}
+              value={rangeField || undefined}
+              options={dateDimOptions.map((k) => ({ value: k, label: optionLabel(k) }))}
+              onChange={(v) => {
+                // 换日期字段时把旧字段上的区间带走，否则会留下一条看不见的条件
+                onFilterTreeChange(stripRange(filterTree, rangeField) ?? emptyRoot());
+                setRangeField(v);
+                onRequestDimValues(v);
+              }}
+            />
+            <DatePicker.RangePicker
+              style={{ width: '100%' }}
+              value={rangeValue}
+              presets={presets}
+              allowClear
+              placeholder={['开始日期', '结束日期']}
+              onChange={(v) => applyRange(v && v[0] && v[1] ? [v[0], v[1]] : null)}
+            />
+            {dataMax && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                数据最新到 {dataMax}
+                {dataMax !== dayjs().format('YYYY-MM-DD') ? '，相对今天的区间可能查不到数据' : ''}
+              </Typography.Text>
+            )}
+          </div>
+        </div>
+      )}
 
       <div>
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
