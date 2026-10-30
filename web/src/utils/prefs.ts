@@ -13,6 +13,8 @@ export type Density = 'compact' | 'full';
 
 export interface UIPrefs {
   density: Density;
+  // 构建器「高级区」的手动开合状态。留空表示跟随档位（简洁档收起、完整档展开）。
+  advancedOpen?: boolean;
 }
 
 const KEY = 'ds_ui_prefs';
@@ -24,7 +26,10 @@ const listeners = new Set<() => void>();
 function load(): UIPrefs {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<UIPrefs>;
-    return { density: raw.density === 'compact' ? 'compact' : 'full' };
+    return {
+      density: raw.density === 'compact' ? 'compact' : 'full',
+      advancedOpen: typeof raw.advancedOpen === 'boolean' ? raw.advancedOpen : undefined,
+    };
   } catch {
     return { ...DEFAULT };
   }

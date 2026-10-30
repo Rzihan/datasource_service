@@ -178,7 +178,7 @@ export default function DatasetTrustCard({ dataset, stats, loading, onReload, co
         </div>
       )}
 
-      {!stats?.error && stats?.updated_at && (
+      {!compact && !stats?.error && stats?.updated_at && (
         <Typography.Text type="secondary" style={{ fontSize: 11 }}>
           配置更新于 {stats.updated_at}
           {stats.updated_by ? ` · ${stats.updated_by}` : ''}

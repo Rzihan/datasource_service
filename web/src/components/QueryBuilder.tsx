@@ -3,6 +3,7 @@ import { App, Alert, Button, DatePicker, InputNumber, Select, Space, Switch, Tag
 import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
 import { ClearOutlined, SearchOutlined } from '@ant-design/icons';
+import { setPrefs, usePrefs } from '../utils/prefs';
 import type { CompareRequest, DatasetStats, FilterNode, OrderBy, QueryDataset } from '../types';
 import DatasetTrustCard from './DatasetTrustCard';
 import PresetAnalyses from './PresetAnalyses';
@@ -202,6 +203,25 @@ export default function QueryBuilder(props: Props) {
     );
   };
 
+  // 高级区默认开合：跟着档位走（简洁档收起），手动切换后写进偏好——
+  // 每天都要手动收一次的东西，等于没收。
+  const prefs = usePrefs();
+  const [advOpen, setAdvOpen] = useState(prefs.advancedOpen ?? !compact);
+  useEffect(() => setAdvOpen(prefs.advancedOpen ?? !compact), [compact, prefs.advancedOpen]);
+  const toggleAdvanced = () => {
+    const next = !advOpen;
+    setAdvOpen(next);
+    setPrefs({ advancedOpen: next });
+  };
+
+  // 收起时必须说清「里面有几项在生效」：折叠区里藏着生效条件，
+  // 是最容易让人以为「我筛过了但没生效 / 我没筛但被筛了」的设计。
+  const advancedActive: string[] = [];
+  if (rangeValue) advancedActive.push(`时间范围 ${rangeValue[0].format('YYYY-MM-DD')} ~ ${rangeValue[1].format('YYYY-MM-DD')}`);
+  if (compare) advancedActive.push(compare.mode === 'prev_year' ? '同比' : '环比');
+  if (orderBy) advancedActive.push(`按${optionLabel(orderBy.field)}${orderBy.desc ? '降序' : '升序'}`);
+  if (limit !== 1000) advancedActive.push(`上限 ${limit}`);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div>
@@ -316,6 +336,56 @@ export default function QueryBuilder(props: Props) {
         />
       </div>
 
+      <div>
+        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            过滤条件{leafCount > 0 ? `（${leafCount} 个）` : ''}
+          </Typography.Text>
+          {leafCount > 0 && (
+            <Button
+              type="link"
+              size="small"
+              icon={<ClearOutlined />}
+              onClick={() => onFilterTreeChange(emptyRoot())}
+            >
+              清空
+            </Button>
+          )}
+        </Space>
+        <div style={{ marginTop: 4 }}>
+          <FilterTreeEditor
+            node={filterTree}
+            onChange={onFilterTreeChange}
+            depth={1}
+            dimOptions={dimOptions}
+            multiDimOptions={multiDimOptions}
+            metricOptions={filterableMetrics}
+            isMetricField={(field) => mtxOptions.includes(field)}
+            optionLabel={optionLabel}
+            dimValues={dimValues}
+            dimValueLoading={dimValueLoading}
+            onRequestDimValues={onRequestDimValues}
+          />
+        </div>
+      </div>
+
+      {/* 高级区：这四块都不是「每次都要改」的——时间范围、对比周期、排序、上限。
+          默认收起，但收起时必须说清里面有几项在生效，否则用户会以为自己没筛过。 */}
+      <div>
+        <Space size={6} style={{ cursor: 'pointer' }} onClick={toggleAdvanced}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            高级：时间范围 / 对比周期 / 排序 / 上限
+          </Typography.Text>
+          {advancedActive.length > 0 && <Tag color="blue">{advancedActive.length} 项生效</Tag>}
+          <Typography.Link style={{ fontSize: 12 }} onClick={(e) => { e.stopPropagation(); toggleAdvanced(); }}>
+            {advOpen ? '收起' : '展开'}
+          </Typography.Link>
+        </Space>
+        {!advOpen && advancedActive.length > 0 && (
+          <div style={{ fontSize: 12, color: 'rgba(0,0,0,0.45)', marginTop: 2 }}>{advancedActive.join(' · ')}</div>
+        )}
+        {advOpen && (
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 14 }}>
       {dateDimOptions.length > 0 && (
         <div>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -400,39 +470,6 @@ export default function QueryBuilder(props: Props) {
       )}
 
       <div>
-        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            过滤条件{leafCount > 0 ? `（${leafCount} 个）` : ''}
-          </Typography.Text>
-          {leafCount > 0 && (
-            <Button
-              type="link"
-              size="small"
-              icon={<ClearOutlined />}
-              onClick={() => onFilterTreeChange(emptyRoot())}
-            >
-              清空
-            </Button>
-          )}
-        </Space>
-        <div style={{ marginTop: 4 }}>
-          <FilterTreeEditor
-            node={filterTree}
-            onChange={onFilterTreeChange}
-            depth={1}
-            dimOptions={dimOptions}
-            multiDimOptions={multiDimOptions}
-            metricOptions={filterableMetrics}
-            isMetricField={(field) => mtxOptions.includes(field)}
-            optionLabel={optionLabel}
-            dimValues={dimValues}
-            dimValueLoading={dimValueLoading}
-            onRequestDimValues={onRequestDimValues}
-          />
-        </div>
-      </div>
-
-      <div>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           排序
         </Typography.Text>
@@ -468,6 +505,10 @@ export default function QueryBuilder(props: Props) {
           value={limit}
           onChange={(v) => onLimitChange(v ?? 1000)}
         />
+      </div>
+
+          </div>
+        )}
       </div>
 
       {!selected && <Alert type="info" showIcon message="先选择一个数据集" />}
