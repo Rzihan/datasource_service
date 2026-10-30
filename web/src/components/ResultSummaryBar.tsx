@@ -1,21 +1,18 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Alert, Button, Card, Col, Row, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Col, Row, Space, Statistic, Tag, Typography } from 'antd';
 import { DatabaseOutlined, FieldTimeOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import type { QueryResult, StringMap } from '../types';
-import { columnDigits, formatScaled, numericText, sumColumn } from '../utils/format';
+import type { QueryResult } from '../types';
 
-// 结果第一屏要回答四个问题才配叫「看板」：
+// 结果第一屏要回答三个「元信息」问题：
 //   1. 一共多少行、是不是全量（截断只给一个小 Tag 等于没说）
 //   2. 慢不慢（耗时）
 //   3. 数据覆盖到哪天（T+1 的数据，不知道边界就会按今天去解读）
-//   4. 总量大概多少（一行行扫下来看不出规模）
+// 指标的量级不在这里，交给下面的 MetricCards —— 一个数只该出现在一个地方，
+// 概览条和卡片都显示一遍「合计 94,571,410」，只会让人怀疑是不是两个数。
 interface Props {
   result: QueryResult;
   limit: number;
-  labelMap: StringMap;
-  // 可加性已在上层算好：比率/均值/去重不能逐行相加，加出来是一眼错的数
-  nonAdditive?: string[];
   // 放宽上限后由上层带着新 limit 重查——前端已有全部结果，但限制是后端给的
   onLimitChange?: (limit: number) => void;
   // 「计算列 / 下载 CSV」这类工具按钮跟着概览条排，不另起一行浪费纵向空间
@@ -39,40 +36,9 @@ function findTemporalColumn(result: QueryResult): { idx: number; min: string; ma
   return null;
 }
 
-// 概览卡里的「总量」只取第一个可加的数值列：
-// 四个维度同时在看的时候，把每列都加起来反而没有重点。
-function pickSummaryColumn(result: QueryResult, labelMap: StringMap, nonAdditive: Set<string>) {
-  for (let c = 0; c < result.columns.length; c += 1) {
-    const name = result.columns[c].name;
-    if (nonAdditive.has(name)) continue;
-    const values = result.rows.map((r) => r[c]);
-    if (!values.some((v) => numericText(v) !== null)) continue;
-    const digits = columnDigits(values);
-    return {
-      title: labelMap[name] || name,
-      value: formatScaled(sumColumn(values, digits), digits),
-      unit: result.rows.length,
-    };
-  }
-  return null;
-}
-
-export default function ResultSummaryBar({
-  result,
-  limit,
-  labelMap,
-  nonAdditive = [],
-  onLimitChange,
-  actions,
-}: Props) {
+export default function ResultSummaryBar({ result, limit, onLimitChange, actions }: Props) {
   const [raising, setRaising] = useState<number | null>(null);
-
   const temporal = useMemo(() => findTemporalColumn(result), [result]);
-  const nonAdditiveSet = useMemo(() => new Set(nonAdditive), [nonAdditive]);
-  const summary = useMemo(
-    () => pickSummaryColumn(result, labelMap, nonAdditiveSet),
-    [result, labelMap, nonAdditiveSet],
-  );
 
   const raise = (next: number) => {
     if (!onLimitChange) return;
@@ -128,17 +94,6 @@ export default function ResultSummaryBar({
                     value={`${temporal.min} ~ ${temporal.max}`}
                     valueStyle={{ fontSize: 20 }}
                   />
-                </Col>
-              )}
-              {summary && (
-                <Col>
-                  <Tooltip title={`${summary.title}：当前返回全部行的合计（比率 / 均值 / 去重类不参与）`}>
-                    <Statistic
-                      title={`${summary.title}（合计）`}
-                      value={summary.value}
-                      valueStyle={{ fontSize: 20, cursor: 'help' }}
-                    />
-                  </Tooltip>
                 </Col>
               )}
             </Row>

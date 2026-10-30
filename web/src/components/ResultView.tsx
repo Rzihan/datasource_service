@@ -26,6 +26,7 @@ import type { ExprNode } from '../utils/expr';
 import { evalExpression, parseExpression } from '../utils/expr';
 import DerivedColumnModal from './DerivedColumnModal';
 import ResultSummaryBar from './ResultSummaryBar';
+import MetricCards from './MetricCards';
 import type { QueryResult, StringMap } from '../types';
 
 // 保持原有导出面：数值判定已挪到 utils/number，图表和推荐规则共用同一套。
@@ -519,6 +520,10 @@ export default function ResultView({
     return <Empty style={{ marginTop: 80 }} description="选择维度与指标后点击「查数」" />;
   }
 
+  // 没有任何维度 = 只有一行汇总值。这时候再摆一张 1 行的表，等于把卡片上的
+  // 四个数字原封不动抄一遍；直接给「KPI 页」，需要的明细去导 CSV。
+  const singleSummary = result.rows.length === 1 && dims.length === 0;
+
   // tab 标签：推荐的那一个带「推荐」角标，不可用的整项置灰并在 tooltip 里说明原因
   const tabLabel = (key: ChartKind) => (
     <Tooltip
@@ -613,8 +618,6 @@ export default function ResultView({
       <ResultSummaryBar
         result={result}
         limit={limit}
-        labelMap={labelMap}
-        nonAdditive={nonAdditive}
         onLimitChange={onLimitChange}
         actions={
           <Space size={8}>
@@ -630,7 +633,15 @@ export default function ResultView({
         }
       />
 
-      {recommendation && (
+      <MetricCards
+        result={result}
+        dims={dims}
+        metrics={metrics}
+        labelMap={labelMap}
+        nonAdditive={nonAdditive}
+      />
+
+      {recommendation && !singleSummary && (
         <Space size={6} style={{ marginBottom: 8 }} wrap>
           <BulbOutlined style={{ color: '#d48806' }} />
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -643,6 +654,11 @@ export default function ResultView({
         </Space>
       )}
 
+      {singleSummary ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          只有一行汇总数据，指标卡就是全部结果。需要原始精度或留档时，用右上角「下载 CSV」。
+        </Typography.Text>
+      ) : (
       <Tabs
         activeKey={tab}
         onChange={(k) => setTab(k as TabKey)}
@@ -679,6 +695,7 @@ export default function ResultView({
           })),
         ]}
       />
+      )}
 
       {derived.length > 0 && (
         <Space size={4} wrap style={{ marginTop: 8 }}>

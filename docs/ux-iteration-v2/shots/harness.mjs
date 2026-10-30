@@ -46,18 +46,14 @@ export function queryUrl(params) {
   return `${BASE}/query?${sp.toString()}`;
 }
 
-// 等「查完了」：表格有行，或空态出现。
+// 等「查完了」：概览条出现（有结果）或空态出现（没结果）。
+// 不看 .ant-tabs —— 单行汇总时表格被收起，没有 tab 但仍然算查完了。
 export async function waitResult(page, timeout = 30000) {
-  await page.waitForSelector('.ant-tabs', { timeout });
   await page.waitForFunction(
-    () => {
-      const row = document.querySelector('.ant-table-tbody .ant-table-row');
-      const empty = document.querySelector('.ant-empty');
-      return !!row || !!empty;
-    },
+    () => !!document.querySelector('.ant-statistic') || !!document.querySelector('.ant-empty'),
     { timeout },
   );
-  await page.waitForTimeout(1200); // 等 G2 动画走完，否则柱子截到一半
+  await page.waitForTimeout(1300); // 等 G2 动画走完，否则柱子截到一半
 }
 
 export async function screenshot(page, name, opts = {}) {
