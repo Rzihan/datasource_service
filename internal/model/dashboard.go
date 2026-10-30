@@ -46,6 +46,13 @@ type DashboardPanel struct {
 	// 多指标查询配指标卡时没有这个字段就只能瞎猜第一个，
 	// 而「猜」在看板上意味着作者看到的主数字跟自己想的不一样。
 	Metric string `json:"metric,omitempty"`
+	// Follow 是否跟随大盘级筛选。用指针而不是 bool：
+	// 「没说」和「说了不跟随」必须是两件事，否则一上线就会把
+	// 所有存量面板默认成不跟随，整屏筛选看起来像坏了。
+	Follow *bool `json:"follow,omitempty"`
+	// EmitFilter 点这个面板的图形时，把哪个字段下钻成整屏筛选。
+	// 作者不声明就用面板的第一个维度——那是「这一块在按什么分」最直接的答案。
+	EmitFilter string `json:"emit_filter,omitempty"`
 }
 
 // DashboardPanelFilter 大盘级筛选器的声明（v32 起生效）。

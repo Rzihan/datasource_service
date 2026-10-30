@@ -44,6 +44,10 @@ COLLECT = {
     "legacy": "collect_daily",
     "owner": "数采组",
     "desc": "旧页的采集日报原样搬过来：上面四个数是当天规模，中间看趋势，下面是明细。口径与旧页一致，只是每块都能自己换维度。",
+    "filters": [
+        {"field": "team", "label": "团队", "dataset": "robot_collection"},
+        {"field": "scene", "label": "场景", "dataset": "robot_collection"},
+    ],
     "panels": [
         {"id": "m1", "title": "采集条数", "dataset": "robot_collection", "view": "metric",
          "query": q(metrics="episodes", limit="200"), "span": 3, "height": 150, "metric": "episodes"},
@@ -59,10 +63,11 @@ COLLECT = {
          "span": 12, "height": 260},
         {"id": "c1", "title": "各团队采集条数", "dataset": "robot_collection", "view": "column",
          "query": q(dims="team", metrics="episodes", order="episodes", dir="desc", limit="50"),
-         "span": 6, "height": 280},
+         "span": 6, "height": 280, "follow": False, "emit_filter": "team",
+         "note": "这一块本身就是团队之间的横向对比，所以不跟随整屏筛选"},
         {"id": "p1", "title": "场景分布", "dataset": "robot_collection", "view": "pie",
          "query": q(dims="scene", metrics="episodes", order="episodes", dir="desc", limit="20"),
-         "span": 6, "height": 280},
+         "span": 6, "height": 280, "emit_filter": "scene"},
         {"id": "d1", "title": "采集明细（近 50 条）", "dataset": "robot_collection", "view": "table",
          "query": q(dims="date,team,collector", metrics="episodes,total_hours,valid_rate,avg_quality",
                     order="date", dir="desc", limit="50"),
@@ -77,6 +82,10 @@ QC = {
     "legacy": "qc_report",
     "owner": "质检组",
     "desc": "旧质检日报的大盘版：上面是当天抽检规模与缺陷，中间看通过率的走势，下面按批次下钻明细。",
+    "filters": [
+        {"field": "team", "label": "团队", "dataset": "robot_qc"},
+        {"field": "severity", "label": "严重等级", "dataset": "robot_qc"},
+    ],
     "panels": [
         {"id": "m1", "title": "抽检样本", "dataset": "robot_qc", "view": "metric",
          "query": q(metrics="samples", limit="200"), "span": 3, "height": 150, "metric": "samples"},
@@ -91,7 +100,8 @@ QC = {
          "span": 12, "height": 260},
         {"id": "c1", "title": "各团队通过率", "dataset": "robot_qc", "view": "column",
          "query": q(dims="team", metrics="pass_rate", order="pass_rate", dir="desc", limit="50"),
-         "span": 6, "height": 280, "note": "通过率是比率，按团队看的是各自的行均值"},
+         "span": 6, "height": 280, "follow": False, "emit_filter": "team",
+         "note": "通过率是比率，按团队看的是各自的行均值；这一块是横向对比，不跟随整屏筛选"},
         {"id": "p1", "title": "缺陷类型分布", "dataset": "robot_qc", "view": "pie",
          "query": q(dims="defect_type", metrics="defects", order="defects", dir="desc", limit="20"),
          "span": 6, "height": 280},
@@ -109,6 +119,10 @@ ANNO = {
     "legacy": "anno_capacity",
     "owner": "标注组",
     "desc": "旧产能看板的大盘版：上面是当天产出规模，中间看人均产能走势，下面是按人/按类型的明细。",
+    "filters": [
+        {"field": "team", "label": "团队", "dataset": "robot_annotation"},
+        {"field": "shift", "label": "班次", "dataset": "robot_annotation"},
+    ],
     "panels": [
         {"id": "m1", "title": "标注帧数", "dataset": "robot_annotation", "view": "metric",
          "query": q(metrics="frames", limit="200"), "span": 4, "height": 150, "metric": "frames"},

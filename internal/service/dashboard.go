@@ -231,9 +231,11 @@ func normalizePanels(in []model.DashboardPanel) []model.DashboardPanel {
 			Dataset: ds,
 			Query:   strings.TrimSpace(p.Query),
 			View:    view,
-			Span:    span,
-			Height:  height,
-			Metric:  strings.TrimSpace(p.Metric),
+			Span:       span,
+			Height:     height,
+			Metric:     strings.TrimSpace(p.Metric),
+			Follow:     p.Follow,
+			EmitFilter: strings.TrimSpace(p.EmitFilter),
 		})
 		if len(out) >= MaxPanels {
 			break

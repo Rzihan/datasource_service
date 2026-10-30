@@ -31,9 +31,19 @@ interface Props {
   onPointClick?: (panel: DashboardPanel, x: string) => void;
   // 面板被大盘筛选影响时，角标上要说一句，否则「这个数怎么变小了」无从解释
   filterNote?: string;
+  // 作者把这个面板设成不跟随整屏筛选。必须显示出来：
+  // 收窄之后唯独这一块数字没变，用户会以为筛选坏了。
+  noFollow?: boolean;
 }
 
-export default function DashboardPanelCard({ panel, dataset, extraFilter, onPointClick, filterNote }: Props) {
+export default function DashboardPanelCard({
+  panel,
+  dataset,
+  extraFilter,
+  onPointClick,
+  filterNote,
+  noFollow,
+}: Props) {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -197,6 +207,11 @@ export default function DashboardPanelCard({ panel, dataset, extraFilter, onPoin
               <Tag color="blue" style={{ marginInlineEnd: 0, cursor: 'help' }}>
                 已筛选
               </Tag>
+            </Tooltip>
+          )}
+          {noFollow && (
+            <Tooltip title="作者设定：这一块不跟随整屏筛选。它本身就是用来做横向对比的，收窄之后就没得比了">
+              <Tag style={{ marginInlineEnd: 0, cursor: 'help' }}>不跟随</Tag>
             </Tooltip>
           )}
         </Space>
