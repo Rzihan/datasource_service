@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
+import dayjs from 'dayjs';
 import {
   Alert,
   App as AntApp,
@@ -7,6 +8,7 @@ import {
   Button,
   Card,
   Col,
+  DatePicker,
   Empty,
   Row,
   Select,
@@ -71,6 +73,10 @@ export default function DashboardPage() {
   // 顶部筛选器的当前值。key 是字段名而不是下标：
   // 作者增删筛选器时，已选的值不该跟着错位。
   const [filterValues, setFilterValues] = useState<Record<string, string>>({});
+  // 大盘级时间范围：分析师最常用的动作之一是「只看最近 7 天 / 这一段」。
+  // 值以 'YYYY-MM-DD' 存，应用时拆成 date >= / date <= 两个条件，
+  // 只作用于「有 date 维度」的面板——没有时间轴的面板强行加日期会直接查空。
+  const [dateRange, setDateRange] = useState<[string, string] | null>(null);
   const [crossFilters, setCrossFilters] = useState<CrossFilter[]>([]);
   const [options, setOptions] = useState<Record<string, string[]>>({});
 
@@ -192,10 +198,16 @@ export default function DashboardPage() {
       for (const c of crossFilters) {
         if (hasField(ds, c.field)) leaves.push({ field: c.field, op: '=', value: c.value });
       }
+      // 时间范围：拆成两个边界条件，落在 date 维度上。
+      // 有 date 维度的面板才加，否则那个面板会被一个不存在的字段筛成空。
+      if (dateRange && hasField(ds, 'date')) {
+        leaves.push({ field: 'date', op: '>=', value: dateRange[0] });
+        leaves.push({ field: 'date', op: '<=', value: dateRange[1] });
+      }
       if (leaves.length === 0) return null;
       return { logic: 'and', children: leaves };
     },
-    [byKey, dashboard, filterValues, crossFilters],
+    [byKey, dashboard, filterValues, crossFilters, dateRange],
   );
 
   // 点图形 → 把它对应的类目变成整屏筛选。
@@ -269,9 +281,12 @@ export default function DashboardPage() {
     chunks.push(`# ${dashboard.title}`);
     chunks.push(`# 导出时间 ${stamp}`);
     if (activeCount > 0) {
-      chunks.push(
-        `# 整屏筛选 ${[...filters.filter((f) => filterValues[f.field]).map((f) => `${f.label || f.field}=${filterValues[f.field]}`), ...crossFilters.map((c) => `${c.field}=${c.value}`)].join('、')}`,
-      );
+      const parts = [
+        ...(dateRange ? [`日期 ${dateRange[0]}~${dateRange[1]}`] : []),
+        ...filters.filter((f) => filterValues[f.field]).map((f) => `${f.label || f.field}=${filterValues[f.field]}`),
+        ...crossFilters.map((c) => `${c.field}=${c.value}`),
+      ];
+      chunks.push(`# 整屏筛选 ${parts.join('、')}`);
     }
     for (const p of panels) {
       const r = panelResults[p.id];
@@ -321,12 +336,24 @@ export default function DashboardPage() {
   const filters = dashboard.filters ?? [];
   const followCount = dashboard.panels.filter((p) => p.follow !== false).length;
   const noFollowCount = dashboard.panels.length - followCount;
-  const activeCount = Object.values(filterValues).filter(Boolean).length + crossFilters.length;
+  const activeCount =
+    Object.values(filterValues).filter(Boolean).length + crossFilters.length + (dateRange ? 1 : 0);
+  // 有没有「带 date 维度的面板」决定要不要露时间范围控件：
+  // 一屏全是按团队/场景汇总、没有时间轴的，给个日期选择器只会让人白点。
+  const hasDatePanel = panels.some((p) => {
+    const d = byKey.get(p.dataset);
+    return !!d && 'date' in d.dim_map;
+  });
 
   // 下钻字段的中文名：优先用顶部声明筛选器里的 label，没有就原样显示字段名
   const labelOf = (field: string) => filters.find((f) => f.field === field)?.label || field;
   const removeCross = (id: string) => setCrossFilters((prev) => prev.filter((c) => c.id !== id));
   const undoCross = () => setCrossFilters((prev) => prev.slice(0, -1));
+  const clearAllFilters = () => {
+    setFilterValues({});
+    setCrossFilters([]);
+    setDateRange(null);
+  };
 
   return (
     <div>
@@ -417,12 +444,32 @@ export default function DashboardPage() {
 
       {/* 整屏筛选。它回答的是「这一屏能不能一起收窄」——
           没有它，大盘只是一堆互不相干的图拼在一起。 */}
-      {(filters.length > 0 || crossFilters.length > 0) && (
+      {(filters.length > 0 || crossFilters.length > 0 || hasDatePanel) && (
         <Card size="small" style={{ marginBottom: 12 }} styles={{ body: { padding: '8px 12px' } }}>
           <Space size={8} wrap align="center">
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               <FilterOutlined /> 整屏筛选
             </Typography.Text>
+            {hasDatePanel && (
+              <DatePicker.RangePicker
+                size="small"
+                style={{ width: 210 }}
+                value={dateRange ? [dayjs(dateRange[0]), dayjs(dateRange[1])] : null}
+                format="MM-DD"
+                allowClear
+                placeholder={['开始', '结束']}
+                onChange={(v) =>
+                  setDateRange(
+                    v && v[0] && v[1] ? [v[0].format('YYYY-MM-DD'), v[1].format('YYYY-MM-DD')] : null,
+                  )
+                }
+                presets={[
+                  { label: '近 7 天', value: [dayjs().subtract(6, 'day'), dayjs()] },
+                  { label: '近 14 天', value: [dayjs().subtract(13, 'day'), dayjs()] },
+                  { label: '近 30 天', value: [dayjs().subtract(29, 'day'), dayjs()] },
+                ]}
+              />
+            )}
             {filters.map((f) => (
               <Select
                 key={f.field}
@@ -436,14 +483,7 @@ export default function DashboardPage() {
               />
             ))}
             {activeCount > 0 && (
-              <Button
-                size="small"
-                type="link"
-                onClick={() => {
-                  setFilterValues({});
-                  setCrossFilters([]);
-                }}
-              >
+              <Button size="small" type="link" onClick={clearAllFilters}>
                 清空筛选
               </Button>
             )}
@@ -530,8 +570,9 @@ export default function DashboardPage() {
             const extra = extraFor(p);
             const note = extra
               ? [
+                  ...(dateRange ? [`日期 ${dateRange[0]}~${dateRange[1]}`] : []),
                   ...filters.filter((f) => filterValues[f.field]).map((f) => `${f.label || f.field}=${filterValues[f.field]}`),
-                  ...crossFilters.map((c) => `${c.field}=${c.value}`),
+                  ...crossFilters.map((c) => `${labelOf(c.field)}=${c.value}`),
                 ].join('、')
               : undefined;
             return (
