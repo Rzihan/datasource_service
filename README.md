@@ -221,10 +221,64 @@ mysql < deploy/mysql/migrate_add_global_label.sql
 `date` / `uv`）提到全局，**并把这些 key 从各数据集的 `label_map` 里摘掉**——不摘的话
 覆盖层会永远压着全局，改全局看不出效果。
 
+## 登录与授权
+
+平台的侧重点是数据分析，不是身份管理。所以鉴权只做两件事：**验企业下发的 JWT**、
+**把 claims 翻译成身份**。不建用户表、不做注册与找回密码、不存会话、不发 refresh token。
+
+一个环境变量 `AUTH_MODE` 切换三种模式：
+
+| 模式 | 用在哪 | 身份来自 | 写配置 |
+| --- | --- | --- | --- |
+| `off`（默认） | 存量部署、单机试用 | `X-User` / `X-Tenants` / `X-Visible-Users` 自报头 | 人人可写 |
+| `dev` | 本地开发、演示 | 登录页选一个预置身份，本服务签发 HS256 token | 有 `editor` 角色才行 |
+| `jwt` | 生产 | 企业 IdP 下发的 token，**只验签不签发** | 同上 |
+
+**身份只有四个字段**：`user`（谁在查）、`tenants`（属于哪些租户）、`visible_users`（能代看谁）、
+`roles`。前三个直接喂给已有的租户 / 列级 / 行级 acl，**acl 逻辑一行没改**——真正的安全边界
+还是数据集上那份配置，鉴权只负责「你是谁」。
+
+**角色只有两个**：`viewer` 看数，`editor` 改配置。一个数据分析平台里「能看」是默认态，
+「能改」才需要资格。所以只在写接口（建/改/删数据集、字段名称、大盘、回滚）上挂一个
+`RequireEditor`，读接口和查询执行对所有人开放。不做权限点、不做角色管理界面。
+
+**三个接口**：
+
+| 接口 | 鉴权 | 说明 |
+| --- | --- | --- |
+| `GET /api/v1/auth/mode` | 否 | 前端启动第一个请求：要不要登录、登录页长什么样、dev 模式有哪些预置身份 |
+| `POST /api/v1/auth/login` | 否 | **仅 dev 模式注册**。生产环境这个路由根本不存在 |
+| `GET /api/v1/auth/me` | 是 | 当前身份 + 是否 editor |
+
+**配置**（全部可缺省，缺省即 `off`）：
+
+```bash
+AUTH_MODE=off|dev|jwt
+AUTH_JWT_SECRET=...            # HS256：验签密钥；dev 模式也是签发密钥
+AUTH_JWT_PUBLIC_KEY=...        # RS256：公钥 PEM，配了它就走非对称验签
+AUTH_JWT_ISSUER=...            # 配了才校验 iss
+AUTH_JWT_AUDIENCE=...          # 配了才校验 aud
+AUTH_CLAIM_USER=sub            # 下面是 claims 映射：各家 IdP 字段名不同，都可改
+AUTH_CLAIM_TENANTS=tenants
+AUTH_CLAIM_VISIBLE_USERS=visible_users
+AUTH_CLAIM_ROLES=roles
+AUTH_EDITOR_ROLES=editor,admin
+AUTH_TOKEN_TTL_SECONDS=28800   # 仅 dev 签发时使用
+AUTH_SSO_URL=...               # jwt 模式下登录页「前往企业登录」的跳转地址
+AUTH_DEV_IDENTITIES=[{"user":"alice","tenants":["采集组"],"roles":["editor"]}]  # 覆盖内置预置身份
+```
+
+租户 / 可见用户 / 角色 claim 支持**数组、逗号分隔字符串、单个字符串**三种形态——
+与其要求对方改 IdP 模板，不如都认。
+
+**为什么默认是 `off`**：升级不能把存量部署拦死。改一个环境变量就切到 `dev` 或 `jwt`，
+代码不用动。完整设计（含取舍与验证记录）见 [`docs/auth/设计.md`](docs/auth/设计.md)。
+
 ## 租户与权限管控（数据集级 / 列级 / 行级）
 
-**登录态**：顶栏可填多个登录身份，存在浏览器本地，随请求头带给后端
-——和「操作人」走 `X-User` 是同一套极简模式，系统不接鉴权：
+**登录态**：`AUTH_MODE=off` 时顶栏可填多个身份（自报，仅用于本地试用）；
+`dev` / `jwt` 模式下身份来自 token，顶栏只显示不让你改——请求头由服务端忽略，
+否则任何人改个头就能换身份：
 
 | 顶栏 | 请求头 | 用途 |
 | --- | --- | --- |
