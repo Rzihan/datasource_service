@@ -460,7 +460,9 @@ export default function DashboardPage() {
         chunks.push(row.map((v) => (v === null || v === undefined ? '' : String(v))).join(','));
       }
     }
-    const blob = new Blob([chunks.join('\n')], { type: 'text/csv;charset=utf-8' });
+    // BOM + \r\n：不带这两样，Excel 直接双击打开就是乱码/挤一列；
+    // 查询页的导出早就有，整屏导出没跟上，这里对齐。
+    const blob = new Blob(['\uFEFF' + chunks.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

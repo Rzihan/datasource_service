@@ -24,7 +24,14 @@ const VIEW_OPTIONS: Array<{ value: PanelView; label: string }> = [
   { value: 'table', label: '明细表' },
 ];
 
-const SPAN_OPTIONS = [3, 4, 6, 8, 12];
+// 宽度档位用「几分之几行」说话：用户想的是「这块占半行」，不是「6 栅格」。
+const SPAN_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 3, label: '1/4 行' },
+  { value: 4, label: '1/3 行' },
+  { value: 6, label: '1/2 行' },
+  { value: 8, label: '2/3 行' },
+  { value: 12, label: '整行' },
+];
 
 export default function PanelEditor({ open, panel, datasets, onClose, onSubmit }: Props) {
   const [title, setTitle] = useState('');
@@ -170,8 +177,17 @@ export default function PanelEditor({ open, panel, datasets, onClose, onSubmit }
         <Form.Item label="画成什么">
           <Select value={view} onChange={setView} options={VIEW_OPTIONS} />
         </Form.Item>
-        <Form.Item label="占多宽（12 栅格）">
-          <Select value={span} onChange={setSpan} options={SPAN_OPTIONS.map((s) => ({ value: s, label: `${s} / 12` }))} />
+        <Form.Item label="占多宽">
+          <Select value={span} onChange={setSpan} options={SPAN_OPTIONS} />
+          {/* 实时预览：12 格里涂蓝 span 格，比数字直觉——选完不用保存就能看到比例 */}
+          <div style={{ display: 'flex', gap: 2, marginTop: 6 }} aria-hidden>
+            {Array.from({ length: 12 }).map((_, i) => (
+              <div
+                key={i}
+                style={{ flex: 1, height: 8, borderRadius: 2, background: i < span ? '#1677ff' : '#f0f0f0' }}
+              />
+            ))}
+          </div>
         </Form.Item>
         <Form.Item label="高度（px）">
           <InputNumber value={height} min={140} max={800} step={20} onChange={(v) => setHeight(Number(v) || 280)} />
