@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -21,8 +21,11 @@ import {
   DeleteOutlined,
   EditOutlined,
   FilterOutlined,
+  NodeIndexOutlined,
   PlusOutlined,
   ReloadOutlined,
+  RightOutlined,
+  RollbackOutlined,
   DownloadOutlined,
   SaveOutlined,
   UndoOutlined,
@@ -39,6 +42,8 @@ import { findLegacyPage } from '../utils/legacyPages';
 // 一次「点图形下钻出来的整屏筛选」。它跟顶部声明的筛选器是两回事：
 // 声明的是作者钉好的常用维度，这个是看的人临时追问「这个柱子是谁」。
 interface CrossFilter {
+  // 每步一个 id：下钻链要能「只删中间某一步」而不是按字段整片删
+  id: string;
   field: string;
   value: string;
   from: string;
@@ -202,7 +207,17 @@ export default function DashboardPage() {
     const dims = parseIntent(ds, panelQuery(ds, panel.query)).dims;
     const field = panel.emit_filter || dims[0];
     if (!field || x === '(空值)') return;
-    setCrossFilters((prev) => [...prev.filter((c) => c.field !== field), { field, value: x, from: panel.title || panel.id }]);
+    // 同一个字段再点一次是「改这一层的取值」，就地替换、保持它在链上的位置，
+    // 而不是把它挪到队尾——否则下钻路径的顺序会被一次重复点击打乱。
+    setCrossFilters((prev) => {
+      const i = prev.findIndex((c) => c.field === field);
+      if (i >= 0) {
+        const next = [...prev];
+        next[i] = { ...next[i], value: x, from: panel.title || panel.id };
+        return next;
+      }
+      return [...prev, { id: `${field}:${x}:${Date.now()}`, field, value: x, from: panel.title || panel.id }];
+    });
   };
 
   const save = async () => {
@@ -307,6 +322,11 @@ export default function DashboardPage() {
   const followCount = dashboard.panels.filter((p) => p.follow !== false).length;
   const noFollowCount = dashboard.panels.length - followCount;
   const activeCount = Object.values(filterValues).filter(Boolean).length + crossFilters.length;
+
+  // 下钻字段的中文名：优先用顶部声明筛选器里的 label，没有就原样显示字段名
+  const labelOf = (field: string) => filters.find((f) => f.field === field)?.label || field;
+  const removeCross = (id: string) => setCrossFilters((prev) => prev.filter((c) => c.id !== id));
+  const undoCross = () => setCrossFilters((prev) => prev.slice(0, -1));
 
   return (
     <div>
@@ -415,14 +435,6 @@ export default function DashboardPage() {
                 options={(options[f.field] ?? []).map((v) => ({ value: v, label: v }))}
               />
             ))}
-            {crossFilters.map((c) => (
-              <Tag key={c.field} closable color="blue" onClose={() => setCrossFilters((prev) => prev.filter((x) => x.field !== c.field))}>
-                {c.field} = {c.value}
-                <Tooltip title={`来自面板「${c.from}」：点图形下钻出来的`}>
-                  <span style={{ marginLeft: 4, opacity: 0.75 }}>下钻</span>
-                </Tooltip>
-              </Tag>
-            ))}
             {activeCount > 0 && (
               <Button
                 size="small"
@@ -441,6 +453,40 @@ export default function DashboardPage() {
                 : '点面板里的图形可以把它下钻成整屏筛选'}
             </Typography.Text>
           </Space>
+          {crossFilters.length > 0 && (
+            // 下钻链：把「点了哪几根柱子」按顺序留下来，而不是一堆并列的标签。
+            // 断点由「返回上一层」回到上一步，单步的 × 只撤这一步。
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                flexWrap: 'wrap',
+                marginTop: 8,
+                paddingTop: 8,
+                borderTop: '1px dashed #f0f0f0',
+              }}
+            >
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                <NodeIndexOutlined /> 下钻链
+              </Typography.Text>
+              {crossFilters.map((c, i) => (
+                <Fragment key={c.id}>
+                  {i > 0 && <RightOutlined style={{ fontSize: 10, color: '#bfbfbf' }} />}
+                  <Tag closable color="blue" style={{ marginInlineEnd: 0 }} onClose={() => removeCross(c.id)}>
+                    <Tooltip title={`第 ${i + 1} 步 · 来自面板「${c.from}」`}>
+                      <span>
+                        {labelOf(c.field)} = {c.value}
+                      </span>
+                    </Tooltip>
+                  </Tag>
+                </Fragment>
+              ))}
+              <Button size="small" type="link" icon={<RollbackOutlined />} onClick={undoCross}>
+                返回上一层
+              </Button>
+            </div>
+          )}
         </Card>
       )}
 
