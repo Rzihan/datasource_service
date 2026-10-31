@@ -5,8 +5,11 @@ import type { DashboardPanel, QueryDataset, QueryResult, StringMap } from '../ty
 import { executeQuery } from '../api';
 import type { FilterNode } from '../types';
 import { pruneEmpty } from '../utils/filterTree';
+import { abbrText } from '../utils/format';
+import { toNumber } from '../utils/number';
 import { panelQuery, parseIntent } from '../utils/intent';
 import { buildPanelData } from '../utils/panelData';
+import Sparkline from './Sparkline';
 
 // 与查询页同一份懒加载：图表库 400KB+，大盘一屏六七个面板，
 // 谁都不该为了看数字先把整包图表库下下来。
@@ -72,6 +75,9 @@ export default function DashboardPanelCard({
   const [loading, setLoading] = useState(false);
   // 单块重试：整屏八块里挂了一块，不该让人把整屏刷新一遍
   const [retry, setRetry] = useState(0);
+  // 指标卡的趋势线。一个总数没有方向感——不知道它在涨还是在跌，
+  // 也不知道这个量级在最近是不是正常。有 date 维度才补这一条。
+  const [trend, setTrend] = useState<number[]>([]);
 
   // 面板的查询串。数据集变了（改名/字段删了）时要重跑，所以放进依赖。
   const queryKey = useMemo(() => {
@@ -148,6 +154,53 @@ export default function DashboardPanelCard({
     [result, dims, metrics, labelMap],
   );
 
+  // 指标卡补一条日趋势：只用来画 sparkline 与算「较昨日」。
+  // 条件收得紧——只有「指标卡 + 没有自己的维度（即一个总数）+ 数据集有 date 维度」
+  // 才值得多跑一次查询；否则宁可让卡片保持朴素，也不为一条没意义的折线加一次往返。
+  const trendField = panel.metric || metrics[0];
+  const wantsTrend =
+    panel.view === 'metric' && dims.length === 0 && !!dataset && !!dataset.dim_map?.date && !!trendField;
+  useEffect(() => {
+    if (!wantsTrend || !dataset) {
+      setTrend([]);
+      return;
+    }
+    let cancelled = false;
+    const it = parseIntent(dataset, panelQuery(dataset, panel.query));
+    const leaves: FilterNode[] = [];
+    if (it.filterTree) leaves.push(it.filterTree);
+    if (extraFilter) leaves.push(extraFilter);
+    void executeQuery({
+      dataset_key: dataset.dataset_key,
+      dims: ['date'],
+      metrics: [trendField as string],
+      filter: leaves.length > 0 ? pruneEmpty({ logic: 'and', children: leaves }) ?? undefined : undefined,
+      order_by: [{ field: 'date', desc: false }],
+      limit: 500,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        const idx = res.columns.findIndex((c) => c.name === trendField);
+        setTrend(idx < 0 ? [] : res.rows.map((r) => toNumber(r[idx]) ?? 0));
+      })
+      .catch(() => {
+        if (!cancelled) setTrend([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wantsTrend, dataset, panel.query, trendField, extraFilter]);
+
+  // 较昨日：趋势最后两天的相对变化。前一日为 0 时不出环比——
+  // 除以 0 得到的「增长了 ∞%」比不显示更容易误读。
+  const delta = useMemo(() => {
+    if (trend.length < 2) return null;
+    const last = trend[trend.length - 1];
+    const prev = trend[trend.length - 2];
+    if (!prev) return null;
+    return { pct: ((last - prev) / Math.abs(prev)) * 100, up: last >= prev };
+  }, [trend]);
+
   // 回报结果：导出与「几块就绪」都靠它。维度名用中文（labelMap 由大盘侧翻译）。
   useEffect(() => {
     if (!onDone) return;
@@ -204,17 +257,49 @@ export default function DashboardPanelCard({
       return <Empty description="暂无数据" style={{ marginTop: 24 }} />;
     }
     if (panel.view === 'metric') {
+      // 主数字给缩写（2,521,531,570 → 25.22 亿），完整值放 tooltip：
+      // 缩写用于扫视，精确值用于核对，两件事不该挤在同一个字号里。
+      const short = abbrText(data.totalText);
       return (
-        <div style={{ padding: '8px 4px' }}>
-          <div style={{ fontSize: 30, fontWeight: 600, lineHeight: 1.2 }}>{data.totalText}</div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        <div style={{ padding: '4px 4px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Tooltip title={`完整值 ${data.totalText}`}>
+            <div
+              style={{
+                fontSize: 28,
+                fontWeight: 600,
+                lineHeight: 1.18,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {short}
+            </div>
+          </Tooltip>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis>
             {panel.metric ? labelMap[panel.metric] || panel.metric : metrics.map((m) => labelMap[m] || m).join(' / ')}
             {!data.additive && ' · 行均值'}
           </Typography.Text>
-          <div style={{ marginTop: 6 }}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {data.rowCount} 行{data.truncated ? ' · 已截断' : ''}
-            </Typography.Text>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
+            {trend.length >= 2 ? (
+              <Tooltip title={`近 ${trend.length} 日每日趋势`}>
+                <span style={{ display: 'inline-flex' }}>
+                  <Sparkline values={trend} width={118} height={30} />
+                </span>
+              </Tooltip>
+            ) : (
+              <span />
+            )}
+            <div style={{ textAlign: 'right', lineHeight: 1.25 }}>
+              {delta && (
+                <div style={{ fontSize: 12, color: '#595959', whiteSpace: 'nowrap' }}>
+                  {delta.up ? '▲' : '▼'} 较昨日 {Math.abs(delta.pct).toFixed(1)}%
+                </div>
+              )}
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {trend.length >= 2 ? `近 ${trend.length} 日` : `${data.rowCount} 行${data.truncated ? ' · 已截断' : ''}`}
+              </Typography.Text>
+            </div>
           </div>
         </div>
       );
