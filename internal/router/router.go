@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"dataset_service/internal/auth"
 	"dataset_service/internal/config"
 	"dataset_service/internal/handler"
 	"dataset_service/internal/middleware"
@@ -28,6 +29,8 @@ type Deps struct {
 	LH     *handler.LabelHandler
 	QH     *query.Handler
 	DH     *handler.DashboardHandler
+	AH     *handler.AuthHandler
+	Auth   *auth.Verifier
 }
 
 // New 构建 gin 引擎：API 路由 + 前端静态资源 + SPA fallback。
@@ -36,9 +39,9 @@ func New(d Deps) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestID(d.Config.RequestIDHdr))
-	r.Use(middleware.Operator("X-User"))
-	r.Use(middleware.Tenants("X-Tenants"))
-	r.Use(middleware.VisibleUsers("X-Visible-Users"))
+	// 认证：off 模式读自报头（与改造前一致），dev / jwt 模式只认 Bearer token。
+	// 一个中间件替换掉原来的 Operator / Tenants / VisibleUsers 三个。
+	r.Use(middleware.Auth(d.Auth))
 	r.Use(middleware.Logger())
 	r.Use(middleware.CORS())
 
@@ -48,26 +51,26 @@ func New(d Deps) *gin.Engine {
 
 	v1 := r.Group("/api/v1")
 	{
+		// 登录与授权。mode / login 不鉴权（见 middleware.authExempt），
+		// 因为问「要不要登录」的人本来就还没登录。
+		v1.GET("/auth/mode", d.AH.Mode)
+		v1.GET("/auth/me", d.AH.Me)
+		if d.Auth.Mode() == auth.ModeDev {
+			// 只在 dev 模式注册：生产环境本服务不签发 token，也就没有这个入口。
+			v1.POST("/auth/login", d.AH.Login)
+		}
+
 		v1.POST("/datasets/validate", d.DS.Validate)
 		// 配置自检：拿真实数仓跑一遍待保存的配置，不必保存后才发现跑不通
 		v1.POST("/datasets/dry-run", d.QH.DryRun)
 		v1.GET("/datasets", d.DS.List)
-		v1.POST("/datasets", d.DS.Create)
 		v1.GET("/datasets/:key", d.DS.Get)
-		v1.PUT("/datasets/:key", d.DS.Update)
-		v1.DELETE("/datasets/:key", d.DS.Delete)
 		// 变更历史与回滚：配置写错了能一键退回
 		v1.GET("/datasets/:key/histories", d.DS.Histories)
-		v1.POST("/datasets/:key/rollback", d.DS.Rollback)
-		// 把误配成指标/普通维度的多值维度搬进 multi_dim_map（乐观锁）
-		v1.POST("/datasets/:key/migrate-multi-dim", d.DS.MigrateMultiDim)
 
 		// 全局字段名称定义（对所有数据集生效的「字段名 → 中文名」字典）
 		v1.GET("/labels", d.LH.List)
-		v1.POST("/labels", d.LH.Create)
 		v1.GET("/labels/:key", d.LH.Get)
-		v1.PUT("/labels/:key", d.LH.Update)
-		v1.DELETE("/labels/:key", d.LH.Delete)
 		// 下面两个刻意不挂在 /labels 下：/labels/:key 的通配段会与同级静态段冲突。
 		// 全量字典，供数据集编辑页显示「继承：XXX」
 		v1.GET("/label-map", d.LH.Map)
@@ -90,10 +93,28 @@ func New(d Deps) *gin.Engine {
 		// 单独一组路由而不是挂在 /datasets 下：/datasets/:key 的通配段
 		// 会与同级静态段冲突，而且大盘本来就不属于某个数据集。
 		v1.GET("/dashboards", d.DH.List)
-		v1.POST("/dashboards", d.DH.Create)
 		v1.GET("/dashboards/:key", d.DH.Get)
-		v1.PUT("/dashboards/:key", d.DH.Update)
-		v1.DELETE("/dashboards/:key", d.DH.Delete)
+	}
+
+	// 改配置需要 editor 角色。看数（GET / query）对所有人开放——
+	// 一个数据分析平台里，「能看」是默认态，「能改」才需要资格。
+	// off 模式下这个中间件直接放行，升级不会拦住现有部署。
+	write := v1.Group("", middleware.RequireEditor(d.Auth))
+	{
+		write.POST("/datasets", d.DS.Create)
+		write.PUT("/datasets/:key", d.DS.Update)
+		write.DELETE("/datasets/:key", d.DS.Delete)
+		write.POST("/datasets/:key/rollback", d.DS.Rollback)
+		// 把误配成指标/普通维度的多值维度搬进 multi_dim_map（乐观锁）
+		write.POST("/datasets/:key/migrate-multi-dim", d.DS.MigrateMultiDim)
+
+		write.POST("/labels", d.LH.Create)
+		write.PUT("/labels/:key", d.LH.Update)
+		write.DELETE("/labels/:key", d.LH.Delete)
+
+		write.POST("/dashboards", d.DH.Create)
+		write.PUT("/dashboards/:key", d.DH.Update)
+		write.DELETE("/dashboards/:key", d.DH.Delete)
 	}
 
 	source := mountSPA(r, d.Config.StaticDir)

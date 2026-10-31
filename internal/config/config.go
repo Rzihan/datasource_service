@@ -1,11 +1,15 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"dataset_service/internal/auth"
 )
 
 // Config 是服务的完整运行配置，全部由环境变量驱动，便于容器化部署。
@@ -18,7 +22,28 @@ type Config struct {
 	DB           DBConfig      // MySQL 配置（存 dataset 配置）
 	CH           CHConfig      // ClickHouse 配置（跑查询）
 	Query        QueryConfig   // 查询执行限制
+	Auth         AuthConfig    // 登录与授权
 	ShutdownWait time.Duration // 优雅退出最长等待时间
+}
+
+// AuthConfig 登录与授权配置。默认 off（不鉴权），与改造前行为一致。
+//
+// 平台侧重点是数据分析，真实环境的身份由企业 IdP 下发 JWT，
+// 所以这里只有「验签 + claims 映射」，没有用户表、没有密码、没有会话。
+type AuthConfig struct {
+	Mode             string // off / dev / jwt
+	Secret           string
+	PublicKeyPEM     string
+	Issuer           string
+	Audience         string
+	TTL              time.Duration // 仅 dev 签发时使用
+	ClaimUser        string
+	ClaimTenants     string
+	ClaimVisibleUser string
+	ClaimRoles       string
+	EditorRoles      []string
+	DevIdentities    []auth.Identity
+	SSOURL           string
 }
 
 // DBConfig 数据库连接与连接池参数。
@@ -94,6 +119,25 @@ func Load() (*Config, error) {
 			MaxConcurrency: envInt("QUERY_MAX_CONCURRENCY", 8),
 			DimValueLimit:  envInt("QUERY_DIM_VALUE_LIMIT", 1000),
 		},
+		Auth: AuthConfig{
+			Mode:             strings.ToLower(envString("AUTH_MODE", auth.ModeOff)),
+			Secret:           os.Getenv("AUTH_JWT_SECRET"),
+			PublicKeyPEM:     os.Getenv("AUTH_JWT_PUBLIC_KEY"),
+			Issuer:           os.Getenv("AUTH_JWT_ISSUER"),
+			Audience:         os.Getenv("AUTH_JWT_AUDIENCE"),
+			TTL:              time.Duration(envInt("AUTH_TOKEN_TTL_SECONDS", 8*3600)) * time.Second,
+			ClaimUser:        envString("AUTH_CLAIM_USER", "sub"),
+			ClaimTenants:     envString("AUTH_CLAIM_TENANTS", "tenants"),
+			ClaimVisibleUser: envString("AUTH_CLAIM_VISIBLE_USERS", "visible_users"),
+			ClaimRoles:       envString("AUTH_CLAIM_ROLES", "roles"),
+			EditorRoles:      envList("AUTH_EDITOR_ROLES", []string{"editor", "admin"}),
+			DevIdentities:    loadDevIdentities(os.Getenv("AUTH_DEV_IDENTITIES")),
+			SSOURL:           os.Getenv("AUTH_SSO_URL"),
+		},
+	}
+
+	if cfg.Auth.Mode != auth.ModeOff && cfg.Auth.Mode != auth.ModeDev && cfg.Auth.Mode != auth.ModeJWT {
+		return nil, fmt.Errorf("invalid AUTH_MODE: %s (want off/dev/jwt)", cfg.Auth.Mode)
 	}
 
 	if cfg.HTTPPort <= 0 || cfg.HTTPPort > 65535 {
@@ -120,6 +164,25 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// VerifierConfig 转成 auth 包需要的配置，避免 main 里再抄一遍字段。
+func (c AuthConfig) VerifierConfig() auth.Config {
+	return auth.Config{
+		Mode:              c.Mode,
+		Secret:            c.Secret,
+		PublicKeyPEM:      c.PublicKeyPEM,
+		Issuer:            c.Issuer,
+		Audience:          c.Audience,
+		TTL:               c.TTL,
+		ClaimUser:         c.ClaimUser,
+		ClaimTenants:      c.ClaimTenants,
+		ClaimVisibleUsers: c.ClaimVisibleUser,
+		ClaimRoles:        c.ClaimRoles,
+		EditorRoles:       c.EditorRoles,
+		DevIdentities:     c.DevIdentities,
+		SSOURL:            c.SSOURL,
+	}
+}
+
 // DSN 组装 MySQL 连接串。
 func (c DBConfig) DSN() string {
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=true&loc=Local&timeout=5s",
@@ -136,6 +199,52 @@ func envString(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envList 解析逗号分隔的环境变量，空值时用默认值。
+func envList(key string, def []string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return def
+	}
+	return out
+}
+
+// loadDevIdentities 解析 dev 模式的预置身份，形如：
+//
+//	[{"user":"alice","tenants":["采集组"],"roles":["editor"]}]
+//
+// 没配就留空，由 auth.New 填默认值；配错了不能让服务起不来，
+// 但必须大声说出来，否则「登录页是空的」会变成一个很难查的问题。
+func loadDevIdentities(raw string) []auth.Identity {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var out []auth.Identity
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		slog.Warn("AUTH_DEV_IDENTITIES is not valid JSON, falling back to built-in identities", "error", err)
+		return nil
+	}
+	kept := make([]auth.Identity, 0, len(out))
+	for _, id := range out {
+		if strings.TrimSpace(id.User) == "" {
+			slog.Warn("AUTH_DEV_IDENTITIES entry without user, skipped")
+			continue
+		}
+		kept = append(kept, id)
+	}
+	return kept
 }
 
 func envInt(key string, def int) int {

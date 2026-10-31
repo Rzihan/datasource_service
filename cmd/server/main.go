@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"dataset_service/internal/auth"
 	"dataset_service/internal/config"
 	"dataset_service/internal/handler"
 	"dataset_service/internal/query"
@@ -57,6 +59,18 @@ func main() {
 		slog.Warn("clickhouse is not reachable, query feature will fail until it recovers", "error", err)
 	}
 
+	// 鉴权：off 模式什么都不做；dev 模式自己签发；jwt 模式只验企业下发的 token。
+	verifier, err := auth.New(cfg.Auth.VerifierConfig())
+	if err != nil {
+		slog.Error("init auth failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("auth initialized",
+		"mode", verifier.Mode(),
+		"editor_roles", strings.Join(cfg.Auth.EditorRoles, ","),
+		"dev_identities", len(verifier.DevIdentities()),
+	)
+
 	dsHandler := handler.NewDatasetHandler(
 		service.NewDatasetService(repo.NewDatasetRepo(db), cfg.MaxSQLBytes),
 	)
@@ -72,6 +86,7 @@ func main() {
 	dashboardHandler := handler.NewDashboardHandler(service.NewDashboardService(repo.NewDashboardRepo(db)))
 	engine := router.New(router.Deps{
 		Config: cfg, DB: db, DS: dsHandler, LH: labelHandler, QH: queryHandler, DH: dashboardHandler,
+		AH: handler.NewAuthHandler(verifier, cfg.Auth.SSOURL), Auth: verifier,
 	})
 
 	srv := &http.Server{
