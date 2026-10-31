@@ -80,6 +80,19 @@ export function sumColumn(values: unknown[], digits: number): bigint {
 const NON_ADDITIVE_FN =
   /\b(avg|avgWeighted|uniq|uniqExact|uniqCombined|median|medianExact|quantile\w*|stddev\w*|var\w*|corr|entropy)\s*\(/i;
 
+// 指标卡的大数缩写：「2,521,531,570」在 30px 的卡片里要读三秒才数得清位数。
+// 缩成「25.22 亿」，完整值放在 tooltip 里——缩写用于扫视，精确值用于核对。
+// 万以下原样返回，避免 9.8 → 9.8（没缩反而多一步）。
+export function abbrText(text: string): string {
+  const n = Number(text.replace(/,/g, ''));
+  if (!Number.isFinite(n)) return text;
+  const trim = (s: string) => (s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s);
+  const a = Math.abs(n);
+  if (a >= 1e8) return `${trim((n / 1e8).toFixed(2))} 亿`;
+  if (a >= 1e4) return `${trim((n / 1e4).toFixed(2))} 万`;
+  return text;
+}
+
 export function isAdditiveMetric(expr: string | undefined): boolean {
   const e = (expr ?? '').trim();
   if (!e) return true;

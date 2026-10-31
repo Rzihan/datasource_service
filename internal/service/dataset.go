@@ -689,5 +689,46 @@ func normalizeMeta(m model.DatasetMeta) model.DatasetMeta {
 			}
 		}
 	}
+	out.Entry = normalizeEntry(m.Entry)
 	return out
+}
+
+// normalizeEntry 收敛菜单入口配置。
+//
+// 入口的 key 要进 URL，所以这里校验得比说明书严格：
+//   - 只允许小写字母、数字、短横线。大小写混写的链接在复制传播时经常变形，
+//     而菜单链接恰恰是最常被复制的东西；
+//   - key 为空视为「不挂入口」——半填的入口会在菜单里渲染出一个点不开的菜单项。
+//
+// 状态只认三个值，不认识的退回「并存」。宁可停在观察期，也不要因为
+// 一个拼错的字符串把旧页直接下线。
+func normalizeEntry(e *model.DatasetEntry) *model.DatasetEntry {
+	if e == nil {
+		return nil
+	}
+	key := strings.TrimSpace(e.Key)
+	if key == "" {
+		return nil
+	}
+	for _, r := range key {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			return nil
+		}
+	}
+	status := strings.TrimSpace(e.Status)
+	switch status {
+	case model.EntryStatusDefault, model.EntryStatusReplaced:
+	default:
+		status = model.EntryStatusParallel
+	}
+	return &model.DatasetEntry{
+		Key:          key,
+		Title:        strings.TrimSpace(e.Title),
+		Module:       strings.TrimSpace(e.Module),
+		Legacy:       strings.TrimSpace(e.Legacy),
+		Status:       status,
+		Note:         strings.TrimSpace(e.Note),
+		DefaultQuery: strings.TrimSpace(e.DefaultQuery),
+		Sort:         e.Sort,
+	}
 }

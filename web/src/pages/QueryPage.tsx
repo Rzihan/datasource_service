@@ -12,6 +12,7 @@ import {
   List,
   Modal,
   Row,
+  Select,
   Space,
   Spin,
   Tag,
@@ -31,17 +32,23 @@ import FavoritesDrawer from '../components/FavoritesDrawer';
 import DiagnosisPanel from '../components/DiagnosisPanel';
 import {
   appendDatasetExample,
+  createDashboard,
   executeQuery,
+  fetchDashboards,
   fetchDatasetStats,
   fetchDimValues,
   fetchQueryDatasets,
+  updateDashboard,
 } from '../api';
 import type {
   CompareRequest,
+  Dashboard,
+  DashboardPanel,
   DatasetStats,
   FilterNode,
   MetaExample,
   OrderBy,
+  PanelView,
   QueryDataset,
   QueryResult,
 } from '../types';
@@ -73,23 +80,29 @@ import {
 } from '../utils/favorites';
 import { subscribeTenants } from '../identity';
 import { setPrefs, usePrefs } from '../utils/prefs';
+import type { QueryIntent } from '../utils/intent';
+import { parseIntent as parseIntentShared } from '../utils/intent';
 
-// 一次查询的完整输入。抽成对象是为了两件事：
-//   1. 从 URL 恢复时要拿「刚解析出来的值」直接查，不能等 setState 生效；
-//   2. 查询历史回填时要能一次性替换掉全部条件。
-interface QueryIntent {
-  key: string;
-  dims: string[];
-  metrics: string[];
-  filterTree: FilterNode;
-  orderBy: OrderBy | null;
-  limit: number;
-  compare: CompareRequest | null;
+// 查询意图的解析挪到了 utils/intent：大盘的面板、入口默认视图、
+// 预置分析都要用同一份规则，各留一份必然会长歪。
+const parseIntent = (ds: QueryDataset, sp: URLSearchParams): QueryIntent => parseIntentShared(ds, sp);
+
+// 入口页复用这一整屏，只是把数据集固定住：
+// 迁移场景里用户是从旧菜单点进来的，他要的是「原来那张表的可视化版」，
+// 不是再来一次「选数据集」。查询能力一点没少，少的只是那个他本来就不会动的入口。
+interface Props {
+  locked?: {
+    key: string;
+    // 说明这个数据集是哪来的，免得用户以为是被谁筛过
+    hint?: string;
+    // 入口自己的默认视图（URL 里 ds 之后的那一段）。
+    // 优先于数据集的 default_example：同一个数据集挂在两个旧页面下时，
+    // 各自想让用户第一眼看到的东西是不一样的。
+    query?: string;
+  };
 }
 
-const MAX_LIMIT = 10000;
-
-export default function QueryPage() {
+export default function QueryPage({ locked }: Props = {}) {
   const { message } = App.useApp();
   // 界面档位是全局偏好：切到简洁档后，口径说明、推荐提示、预置分析都收起来
   const prefs = usePrefs();
@@ -97,7 +110,7 @@ export default function QueryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [datasets, setDatasets] = useState<QueryDataset[]>([]);
   const [loadingList, setLoadingList] = useState(false);
-  const [selectedKey, setSelectedKey] = useState<string>('');
+  const [selectedKey, setSelectedKey] = useState<string>(locked?.key ?? '');
   const [dims, setDims] = useState<string[]>([]);
   const [metrics, setMetrics] = useState<string[]>([]);
   const [filterTree, setFilterTree] = useState<FilterNode>(emptyRoot());
@@ -129,6 +142,15 @@ export default function QueryPage() {
   const [saveName, setSaveName] = useState('');
   const [saveNote, setSaveNote] = useState('');
   const [saveAsDefault, setSaveAsDefault] = useState(false);
+  // 加入大盘：在查询页调好的这一屏，最自然的下一步是「把它放进某张大盘」
+  const [dashOpen, setDashOpen] = useState(false);
+  const [dashboards, setDashboards] = useState<Dashboard[]>([]);
+  const [dashTarget, setDashTarget] = useState('');
+  const [dashNewKey, setDashNewKey] = useState('');
+  const [dashNewTitle, setDashNewTitle] = useState('');
+  const [dashPanelTitle, setDashPanelTitle] = useState('');
+  const [dashView, setDashView] = useState<PanelView>('table');
+  const [dashSaving, setDashSaving] = useState(false);
   // 数据集体检报告：选完数据集就异步扫一次，不阻塞查询
   const [stats, setStats] = useState<DatasetStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
@@ -184,39 +206,6 @@ export default function QueryPage() {
     [message],
   );
 
-  // 把一段查询串解析成一次查询意图。URL 与「作者预置的分析」共用这一份解析：
-  // 预置存的就是 URL 里 ds 之后的那一段，只要链接能还原，预置就一定能还原，
-  // 不需要维护两套规则，也不会出现「链接能开、预置开不了」。
-  const parseIntent = (ds: QueryDataset, sp: URLSearchParams): QueryIntent => {
-    // 查询串可能来自别的环境 / 数据集改过字段，只保留当前数据集真实存在的字段
-    const parseList = (name: string, allowed: (f: string) => boolean) =>
-      (sp.get(name) ?? '').split(',').filter((v) => v && allowed(v));
-
-    const dims = parseList('dims', (f) => f in ds.dim_map || f in ds.multi_dim_map);
-    const metrics = parseList('metrics', (f) => f in ds.mtx_map);
-
-    let filter: FilterNode = emptyRoot();
-    const rawFilter = sp.get('filter');
-    if (rawFilter) {
-      try {
-        filter = JSON.parse(rawFilter) as FilterNode;
-      } catch {
-        filter = emptyRoot();
-      }
-    }
-    const orderField = sp.get('order') ?? '';
-    const order: OrderBy | null = orderField ? { field: orderField, desc: sp.get('dir') !== 'asc' } : null;
-    const parsedLimit = Number(sp.get('limit') ?? 1000) || 1000;
-    const safeLimit = Math.min(Math.max(parsedLimit, 1), MAX_LIMIT);
-    const cmpMode = sp.get('cmp');
-    const cmpField = sp.get('cmpf') ?? '';
-    const cmp: CompareRequest | null =
-      (cmpMode === 'prev_period' || cmpMode === 'prev_year') && cmpField in ds.dim_map
-        ? { mode: cmpMode, field: cmpField }
-        : null;
-    return { key: ds.dataset_key, dims, metrics, filterTree: filter, orderBy: order, limit: safeLimit, compare: cmp };
-  };
-
   // 一次落全量状态再查：不能让用户「先选数据集、再看预置里少了什么」。
   // 预置里带了 filter / 对比周期也一样，点一下就该是作者当时看到的那张图。
   const applyIntent = (ds: QueryDataset, sp: URLSearchParams) => {
@@ -233,6 +222,39 @@ export default function QueryPage() {
     if (it.dims.length > 0 || it.metrics.length > 0) {
       void execute(it);
     }
+  };
+
+  // 入口页打开时该跑什么。
+  //
+  // 顺序是刻意排的：
+  //   ① URL 里写明了要看什么 → 以链接为准（分享出去的链接必须能还原）
+  //   ② 用户自己的默认收藏
+  //   ③ 入口自己的默认视图（作者为这个入口钉的那张图）
+  //   ④ 数据集的默认视图
+  //
+  // 用户优先于作者：入口是作者给的，但「我每次想先看什么」是用户的事。
+  // 入口默认视图又优先于数据集默认视图，因为同一个数据集挂在不同旧页面下时，
+  // 用户带着的预期是不一样的——从「采集日报」进来的人不该先看到「质检通过率」。
+  const openLocked = (items: QueryDataset[]) => {
+    if (!locked) return;
+    const ds = items.find((d) => d.dataset_key === locked.key);
+    if (!ds) return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get('dims') || sp.get('metrics')) {
+      applyIntent(ds, sp);
+      return;
+    }
+    const fav = loadFavorites().find((f) => f.datasetKey === locked.key && f.isDefault);
+    if (fav) {
+      applyFavorite(fav, items);
+      return;
+    }
+    if (locked.query) {
+      applyIntent(ds, new URLSearchParams(locked.query));
+      return;
+    }
+    const q = ds.meta?.default_example;
+    if (q) applyIntent(ds, new URLSearchParams(q));
   };
 
   // 从 URL 恢复：链接是「可交付物」，同事点开应该看到同一张图，
@@ -276,13 +298,21 @@ export default function QueryPage() {
       setDatasets(items);
       if (!restoredRef.current) {
         restoredRef.current = true;
-        applyUrlState(items);
+        // 入口页不从 URL 恢复数据集：数据集由入口配置决定，URL 里那一段
+        // 只描述「这一屏查了什么」，分享出去仍然能还原。
+        if (locked) {
+          openLocked(items);
+        } else {
+          applyUrlState(items);
+        }
       }
     } catch (e) {
       message.error((e as Error).message || '加载数据集失败');
     } finally {
       setLoadingList(false);
     }
+    // locked 是入口页的固定数据集，读取一次即可，不该触发重新加载
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [message, applyUrlState]);
 
   useEffect(() => {
@@ -611,6 +641,65 @@ export default function QueryPage() {
     message.success(saveAsDefault ? `已收藏「${name}」，并设为该数据集的默认视图` : `已收藏「${name}」`);
   };
 
+  // 打开「加入大盘」：大盘列表每次现拉，避免拿的是别人刚改过的旧版本号
+  const openAddToDashboard = async () => {
+    if (!selectedKey) return;
+    const res = await fetchDashboards().catch(() => ({ items: [] as Dashboard[] }));
+    setDashboards(res.items ?? []);
+    setDashTarget((res.items ?? [])[0]?.key ?? '__new__');
+    setDashNewKey('');
+    setDashNewTitle('');
+    setDashPanelTitle(
+      metrics.map((m) => labelOf(selectedKey)(m)).join(' / ') || selected?.dataset_name || '',
+    );
+    setDashView('table');
+    setDashOpen(true);
+  };
+
+  const submitAddToDashboard = async () => {
+    if (!selectedKey) return;
+    const panel: DashboardPanel = {
+      id: `p${Date.now()}`,
+      title: dashPanelTitle.trim(),
+      dataset: selectedKey,
+      query: currentQueryString(),
+      view: dashView,
+      // 指标卡天然是窄条，其余给半屏：默认就摆出旧大盘页的形状
+      span: dashView === 'metric' ? 3 : 6,
+      height: dashView === 'metric' ? 150 : 280,
+      metric: metrics[0],
+    };
+    setDashSaving(true);
+    try {
+      if (dashTarget === '__new__') {
+        const key = dashNewKey.trim();
+        await createDashboard({
+          key,
+          title: dashNewTitle.trim() || panel.title || key,
+          module: '',
+          desc: '',
+          owner: '',
+          legacy: '',
+          status: 'parallel',
+          panels: [panel],
+          filters: [],
+          version: 0,
+        });
+        message.success(`已新建大盘「${dashNewTitle.trim() || key}」并加入这一屏`);
+      } else {
+        const d = dashboards.find((x) => x.key === dashTarget);
+        if (!d) throw new Error('选中的大盘不存在');
+        await updateDashboard(d.key, { panels: [...d.panels, panel], version: d.version });
+        message.success(`已加入「${d.title}」`);
+      }
+      setDashOpen(false);
+    } catch (e) {
+      message.error((e as Error).message || '加入失败');
+    } finally {
+      setDashSaving(false);
+    }
+  };
+
   // 应用一条收藏：打开、置为默认视图后自动跑，都走这里。
   // 分出一个不带「关抽屉」的版本，是为了让默认视图在页面加载时也能复用同一套动作。
   // items 可以显式传入：首次加载时数据集列表刚取回来、还没进 state，
@@ -753,6 +842,8 @@ export default function QueryPage() {
               onReloadStats={() => loadStats(selectedKey)}
               onOpenPreset={openPreset}
               compact={compact}
+              locked={!!locked}
+              lockedHint={locked?.hint}
             />
           )}
         </Card>
@@ -762,16 +853,28 @@ export default function QueryPage() {
           size="small"
           title="查询结果"
           extra={
-            <Tooltip title="把当前这一屏写进数据集的说明书，下一个用这个数据集的人直接就能看到">
-              <Button
-                size="small"
-                type="text"
-                disabled={!selectedKey || dims.length === 0}
-                onClick={openSavePreset}
-              >
-                存为预置分析
-              </Button>
-            </Tooltip>
+            <Space size={2}>
+              <Tooltip title="把当前这一屏写进数据集的说明书，下一个用这个数据集的人直接就能看到">
+                <Button
+                  size="small"
+                  type="text"
+                  disabled={!selectedKey || dims.length === 0}
+                  onClick={openSavePreset}
+                >
+                  存为预置分析
+                </Button>
+              </Tooltip>
+              <Tooltip title="把这一屏加进一张大盘：旧页面大多是大盘形态，一次查询替代不了一整页">
+                <Button
+                  size="small"
+                  type="text"
+                  disabled={!selectedKey || (dims.length === 0 && metrics.length === 0)}
+                  onClick={() => void openAddToDashboard()}
+                >
+                  加入大盘
+                </Button>
+              </Tooltip>
+            </Space>
           }
         >
           {error && (
@@ -961,6 +1064,67 @@ export default function QueryPage() {
             存的是「{dims.length ? `${dims.length} 个维度` : '无维度'} ·{' '}
             {metrics.length ? `${metrics.length} 个指标` : '无指标'}
             {compare ? ' · 带对比周期' : ''} · 上限 {limit}」这一整套条件，写进数据集的 meta。
+          </Typography.Text>
+        </Space>
+      </Modal>
+
+      <Modal
+        title="把这一屏加入大盘"
+        open={dashOpen}
+        onOk={() => void submitAddToDashboard()}
+        onCancel={() => setDashOpen(false)}
+        okButtonProps={{ loading: dashSaving }}
+        okText="加入"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Select
+            style={{ width: '100%' }}
+            value={dashTarget}
+            onChange={setDashTarget}
+            options={[
+              ...dashboards.map((d) => ({ value: d.key, label: `${d.title}（${d.panels.length} 个面板）` })),
+              { value: '__new__', label: '＋ 新建一张大盘' },
+            ]}
+          />
+          {dashTarget === '__new__' && (
+            <>
+              <Input
+                placeholder="大盘 key：小写字母数字短横线，例如 qc-overview"
+                value={dashNewKey}
+                onChange={(e) => setDashNewKey(e.target.value)}
+              />
+              <Input
+                placeholder="大盘标题，例如：质检日报"
+                value={dashNewTitle}
+                onChange={(e) => setDashNewTitle(e.target.value)}
+              />
+            </>
+          )}
+          <Input
+            placeholder="这一块的标题，例如：各团队采集条数"
+            value={dashPanelTitle}
+            maxLength={40}
+            onChange={(e) => setDashPanelTitle(e.target.value)}
+          />
+          <Select
+            style={{ width: '100%' }}
+            value={dashView}
+            onChange={setDashView}
+            options={[
+              { value: 'table', label: '明细表' },
+              { value: 'metric', label: '指标卡（一个数）' },
+              { value: 'line', label: '折线图（看趋势）' },
+              { value: 'column', label: '柱状图（比大小）' },
+              { value: 'pie', label: '饼图（看占比）' },
+            ]}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            加入的是当前这一整套条件（{dims.length ? `${dims.length} 个维度` : '无维度'} ·{' '}
+            {metrics.length ? `${metrics.length} 个指标` : '无指标'}
+            {compare ? ' · 带对比周期' : ''} · 上限 {limit}），
+            面板会带进大盘自己的筛选逻辑。
           </Typography.Text>
         </Space>
       </Modal>

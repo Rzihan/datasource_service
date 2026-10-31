@@ -37,6 +37,29 @@ export interface MetaExample {
   query: string;
 }
 
+// 菜单入口：把这个数据集钉在某个存量页面的菜单位置上。
+//
+// 为什么需要它：历史用户要迁移的不是「查询能力」，而是「我原来那个页面」。
+// 只给一个可视化查询页、让他在几十个数据集里认出哪个是原来那张表，
+// 等于把识别成本转嫁给用户。入口挂在原位置，且是「数据集 + 固定视图」的组合。
+export interface DatasetEntry {
+  // 入口标识，进 URL（/e/{key}），只允许小写字母数字与短横线
+  key: string;
+  // 菜单标题，留空则用数据集名
+  title?: string;
+  // 所属模块（一级菜单名）
+  module?: string;
+  // 它替代的存量页面标识
+  legacy?: string;
+  // 迁移状态：parallel 并存 / default 默认走新版 / replaced 旧页已下线
+  status?: 'parallel' | 'default' | 'replaced';
+  // 与旧页的差异说明：换了什么口径、多了什么能力
+  note?: string;
+  // 入口自己的默认视图，优先于数据集的 default_example
+  default_query?: string;
+  sort?: number;
+}
+
 // 数据集说明书。不参与 SQL 生成，只影响「看不看得懂、敢不敢用」。
 export interface DatasetMeta {
   description?: string;
@@ -49,6 +72,8 @@ export interface DatasetMeta {
   // 作者的默认视图：某条 example 的 query。
   // 作者不该靠「堆十条预置」表达意图——那只是把选择成本转嫁给用户。
   default_example?: string;
+  // 菜单挂载点。一个数据集最多挂一个入口——挂多个说明它本来就该拆开。
+  entry?: DatasetEntry;
 }
 
 // 查询页看到的数据集：刻意不含 mid_sql（用户不感知 SQL）与 acl。
@@ -331,4 +356,57 @@ export interface LabelCheckResult {
   orphans: LabelOrphan[];
   dataset_count: number;
   global_count: number;
+}
+
+// 面板画成什么。与后端 PanelView 常量一一对应，
+// 刻意不做更多类型：多一种就要作者多理解一次「条形图和柱状图有什么区别」，
+// 而看板上的收益几乎为零。
+export type PanelView = 'table' | 'metric' | 'line' | 'column' | 'pie';
+
+// 大盘里的一个面板 = 一次可视化查询 + 怎么呈现它。
+//
+// 面板不自己定义「数据怎么算」：dataset + query 与查询页共用同一段查询串，
+// 于是「在查询页调好的那一屏」可以直接搬进大盘，不需要翻译，
+// 也不会出现链接能开、面板开不了的两套规则。
+export interface DashboardPanel {
+  id: string;
+  title?: string;
+  note?: string;
+  dataset: string;
+  query?: string;
+  view: PanelView;
+  // 12 栅格里占几列
+  span: number;
+  // 像素高度。给高度而不是自适应：大盘要能一眼扫完，高度不齐视觉会乱跳
+  height: number;
+  // 指标卡形态下取哪一列做主数字
+  metric?: string;
+  // 是否跟随大盘级筛选（v32）。undefined = 跟随
+  follow?: boolean;
+  // 面板自己声明的筛选字段（v32 联动时用）
+  emit_filter?: string;
+}
+
+// 大盘级筛选器：整屏都要按它收窄，面板可以声明不跟随。
+export interface DashboardFilter {
+  field: string;
+  label?: string;
+  dataset?: string;
+  default?: string;
+}
+
+export interface Dashboard {
+  key: string;
+  title: string;
+  module?: string;
+  desc?: string;
+  owner?: string;
+  legacy?: string;
+  // 迁移状态，与入口（DatasetEntry.status）共用一套取值
+  status?: 'parallel' | 'default' | 'replaced';
+  panels: DashboardPanel[];
+  filters?: DashboardFilter[];
+  version: number;
+  updated_by?: string;
+  updated_at?: string;
 }

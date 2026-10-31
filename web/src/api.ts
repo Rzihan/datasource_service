@@ -1,7 +1,11 @@
 import axios from 'axios';
+import { clearToken, getToken, notifyUnauthorized } from './auth';
+import type { AuthModeInfo, Identity, MeInfo } from './auth';
 import type {
   CreatePayload,
+  Dashboard,
   DatasetConfig,
+  DatasetEntry,
   DatasetMeta,
   DatasetStats,
   DryRunResult,
@@ -23,15 +27,33 @@ import type {
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 20000 });
 
-// 系统不接鉴权：操作人来自本地填写的用户名，租户 / 可见用户来自本地选择的列表，
-// 三者都随请求头带给后端，分别用于审计、数据集级可见性与行级过滤。
-// 注意这几个头由服务端读取，客户端传什么就按什么过滤——真实环境必须由网关覆盖。
+// 登录态：Bearer token。dev / jwt 模式下服务端只认它，自报头一律忽略。
 http.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  // off 模式（不鉴权）仍沿用自报头，保持与改造前一致的行为；
+  // dev / jwt 模式下服务端会忽略这三个头，带上它们只是为了不破坏老部署。
   config.headers['X-User'] = localStorage.getItem('ds_operator') || 'system';
   config.headers['X-Tenants'] = localStorage.getItem('ds_tenants') || '';
   config.headers['X-Visible-Users'] = localStorage.getItem('ds_visible_users') || '';
   return config;
 });
+
+// 收到 401 就是「得重新登录了」。清掉本地 token 并通知 App 跳登录页。
+// 具体原因服务端不细说（token 为什么错是企业 IdP 的事），这里也不猜。
+http.interceptors.response.use(
+  (res) => res,
+  (err: unknown) => {
+    const e = err as { response?: { status?: number } };
+    if (e.response?.status === 401) {
+      clearToken();
+      notifyUnauthorized();
+    }
+    return Promise.reject(err);
+  },
+);
 
 // 把后端的统一响应结构拆开：code 非 0 时直接抛错，业务侧只处理 data。
 async function unwrap<T>(promise: Promise<{ data: { code: number; message: string; data: T } }>): Promise<T> {
@@ -43,6 +65,21 @@ async function unwrap<T>(promise: Promise<{ data: { code: number; message: strin
     throw new Error(res.data.message || '请求失败');
   }
   return res.data.data;
+}
+
+// --- 登录与授权 ---
+// mode 不鉴权：问「要不要登录」的人本来就还没登录。
+export function fetchAuthMode(): Promise<AuthModeInfo> {
+  return unwrap(http.get('/auth/mode'));
+}
+
+// dev 模式：选一个预置身份换 token。生产模式没有这个接口。
+export function devLogin(user: string): Promise<{ token: string; identity: Identity; expires_in: number }> {
+  return unwrap(http.post('/auth/login', { user }));
+}
+
+export function fetchMe(): Promise<MeInfo> {
+  return unwrap(http.get('/auth/me'));
 }
 
 export function fetchList(params: { page: number; size: number; keyword?: string }): Promise<ListResult> {
@@ -128,6 +165,31 @@ export async function appendDatasetExample(
   });
 }
 
+// 改菜单入口配置（状态 / 默认视图 / 差异说明…）。
+// 内部仍是「读配置 → 打补丁 → 带 version 回写」：入口是数据集的一部分，
+// 不该为它单开一套存储，也不该绕开乐观锁。
+export async function updateDatasetEntry(
+  key: string,
+  patch: Partial<DatasetEntry>,
+): Promise<DatasetConfig> {
+  const cfg = await fetchOne(key);
+  const prev = cfg.meta?.entry;
+  if (!prev?.key) throw new Error('这个数据集还没挂入口');
+  const entry: DatasetEntry = { ...prev, ...patch };
+  return updateDataset(key, {
+    dataset_name: cfg.dataset_name,
+    mid_sql: cfg.mid_sql,
+    dim_map: cfg.dim_map,
+    multi_dim_map: cfg.multi_dim_map ?? {},
+    mtx_map: cfg.mtx_map,
+    label_map: cfg.label_map ?? {},
+    acl: cfg.acl ?? {},
+    status: cfg.status,
+    meta: { ...(cfg.meta ?? {}), entry },
+    version: cfg.version,
+  });
+}
+
 // 多值维度误配扫描：把「疑似多值维度却当指标/普通维度配着」的列出来
 export function fetchMultiDimCheck(): Promise<MultiDimCheckResult> {
   return unwrap(http.get('/multi-dim-check'));
@@ -170,4 +232,34 @@ export function deleteLabel(key: string): Promise<unknown> {
 // 一致性检查：冲突 / 大小写不生效 / 缺失 / 孤儿
 export function fetchLabelCheck(): Promise<LabelCheckResult> {
   return unwrap(http.get('/label-check'));
+}
+
+// ---- 大盘 ----
+
+export function fetchDashboards(): Promise<{ items: Dashboard[] }> {
+  return unwrap(http.get('/dashboards'));
+}
+
+export function fetchDashboard(key: string): Promise<Dashboard> {
+  return unwrap(http.get(`/dashboards/${encodeURIComponent(key)}`));
+}
+
+// 新建大盘。key 进 URL，所以与入口同款：只允许小写字母数字短横线，
+// 非法值在后端会被拒——这里不做前端兜底改写，因为「我写的 key 被悄悄改了」
+// 比直接报错更难排查。
+export function createDashboard(payload: Dashboard): Promise<Dashboard> {
+  return unwrap(http.post('/dashboards', payload));
+}
+
+// 更新大盘。带 version 做乐观锁：两个人同时改布局时，后提交的那个要看到
+// 「被别人改过了」，而不是静默覆盖掉对方刚拖好的顺序。
+export function updateDashboard(
+  key: string,
+  payload: Partial<Dashboard> & { version: number },
+): Promise<Dashboard> {
+  return unwrap(http.put(`/dashboards/${encodeURIComponent(key)}`, payload));
+}
+
+export function deleteDashboard(key: string): Promise<{ key: string }> {
+  return unwrap(http.delete(`/dashboards/${encodeURIComponent(key)}`));
 }

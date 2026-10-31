@@ -27,25 +27,6 @@ func RequestID(header string) gin.HandlerFunc {
 	}
 }
 
-// Operator 解析操作人。系统不接鉴权，操作人来自 X-User 请求头，
-// 缺失时回落为 system，写入 created_by / updated_by。
-func Operator(header string) gin.HandlerFunc {
-	if header == "" {
-		header = "X-User"
-	}
-	return func(c *gin.Context) {
-		op := strings.TrimSpace(c.GetHeader(header))
-		if op == "" {
-			op = "system"
-		}
-		if len(op) > 64 {
-			op = op[:64]
-		}
-		c.Set("operator", op)
-		c.Next()
-	}
-}
-
 // 登录态在 gin context 里的键。
 const (
 	TenantCtxKey = "tenants"
@@ -53,31 +34,6 @@ const (
 	// 注意它与 operator（X-User，我是谁）不是一回事，这里是「我能看到谁」。
 	VisibleUsersCtxKey = "visible_users"
 )
-
-// Tenants 解析当前登录态所属的租户，来自 X-Tenants 请求头（逗号分隔，支持多租户）。
-//
-// 与 Operator 同一套思路：系统不接鉴权，租户由调用方自报，
-// 只用于判断数据集对当前登录态是否可见，不作为安全边界。
-func Tenants(header string) gin.HandlerFunc {
-	if header == "" {
-		header = "X-Tenants"
-	}
-	return func(c *gin.Context) {
-		c.Set(TenantCtxKey, ParseMultiValue(c.GetHeader(header)))
-		c.Next()
-	}
-}
-
-// VisibleUsers 解析当前登录态可见的用户列表，来自 X-Visible-Users 请求头（逗号分隔）。
-func VisibleUsers(header string) gin.HandlerFunc {
-	if header == "" {
-		header = "X-Visible-Users"
-	}
-	return func(c *gin.Context) {
-		c.Set(VisibleUsersCtxKey, ParseMultiValue(c.GetHeader(header)))
-		c.Next()
-	}
-}
 
 // CurrentVisibleUsers 从 gin context 取可见用户列表。
 func CurrentVisibleUsers(c *gin.Context) []string {

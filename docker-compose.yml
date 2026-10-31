@@ -93,6 +93,16 @@ services:
       QUERY_DEFAULT_LIMIT: 1000
       QUERY_MAX_CONCURRENCY: 8
       QUERY_DIM_VALUE_LIMIT: 1000
+      # ---- 登录与授权 ----
+      # off：不鉴权（默认，存量部署升级不会被拦）；dev：登录页选预置身份；
+      # jwt：只验企业 IdP 下发的 token。切到 jwt 时要同时给 AUTH_JWT_SECRET
+      # 或 AUTH_JWT_PUBLIC_KEY，否则服务会拒绝启动。
+      AUTH_MODE: ${AUTH_MODE:-off}
+      AUTH_JWT_ISSUER: ${AUTH_JWT_ISSUER:-}
+      AUTH_JWT_AUDIENCE: ${AUTH_JWT_AUDIENCE:-}
+      AUTH_EDITOR_ROLES: ${AUTH_EDITOR_ROLES:-editor,admin}
+      # 密钥不要写进仓库：放在 .env 里，由 compose 注入
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
     ports:
       - '8080:8080'
     restart: unless-stopped

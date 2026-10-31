@@ -143,3 +143,50 @@ func TestCreateRejectsInvalidInputBeforeHittingRepo(t *testing.T) {
 		t.Fatalf("expected ErrInvalid, got %v", err)
 	}
 }
+
+func TestNormalizeEntry(t *testing.T) {
+	// key 为空 = 没挂入口，而不是挂一个空入口：菜单上会真的多出一项，比没有更糟
+	if got := normalizeEntry(nil); got != nil {
+		t.Fatalf("nil entry: got %+v", got)
+	}
+	if got := normalizeEntry(&model.DatasetEntry{Key: "  "}); got != nil {
+		t.Fatalf("blank key: got %+v", got)
+	}
+	// 大小写混写的链接在复制传播时经常变形，而菜单链接恰恰是最常被复制的东西
+	if got := normalizeEntry(&model.DatasetEntry{Key: "Collect-Daily"}); got != nil {
+		t.Fatalf("uppercase key should be dropped: got %+v", got)
+	}
+	if got := normalizeEntry(&model.DatasetEntry{Key: "collect daily"}); got != nil {
+		t.Fatalf("key with space should be dropped: got %+v", got)
+	}
+
+	got := normalizeEntry(&model.DatasetEntry{
+		Key:    " collect-daily ",
+		Title:  " 采集任务日报 ",
+		Module: " 数据采集 ",
+		Legacy: " collect_daily ",
+		Status: "replaced",
+		Note:   " 同一份数据 ",
+		Sort:   10,
+	})
+	if got == nil || got.Key != "collect-daily" || got.Title != "采集任务日报" ||
+		got.Module != "数据采集" || got.Legacy != "collect_daily" ||
+		got.Status != model.EntryStatusReplaced || got.Note != "同一份数据" || got.Sort != 10 {
+		t.Fatalf("normalize: got %+v", got)
+	}
+
+	// 状态不认识就退回并存：宁可停在观察期，也不要因为拼错一个字符串把旧页下线
+	cases := map[string]string{
+		"":          model.EntryStatusParallel,
+		"parallel":  model.EntryStatusParallel,
+		"default":   model.EntryStatusDefault,
+		"replaced":  model.EntryStatusReplaced,
+		"REPLACED ": model.EntryStatusParallel,
+		"deleted":   model.EntryStatusParallel,
+	}
+	for in, want := range cases {
+		if got := normalizeEntry(&model.DatasetEntry{Key: "k", Status: in}); got.Status != want {
+			t.Fatalf("status %q: got %q want %q", in, got.Status, want)
+		}
+	}
+}
