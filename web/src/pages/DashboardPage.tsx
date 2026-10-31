@@ -32,6 +32,7 @@ import {
   RollbackOutlined,
   DownloadOutlined,
   ExportOutlined,
+  LinkOutlined,
   SaveOutlined,
   UndoOutlined,
 } from '@ant-design/icons';
@@ -54,6 +55,16 @@ interface CrossFilter {
   from: string;
 }
 
+// 从 URL 还原整屏状态用：坏掉的参数一律当「没带」，别让一条手改过的链接打不开页面
+function readJson<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 // 大盘：一屏多面板。
 //
 // 它不是「一次查询的另一种画法」，而是把「一个旧页面」还原出来的单位：
@@ -70,12 +81,19 @@ export default function DashboardPage() {
   const [reloadToken, setReloadToken] = useState(0);
   // 从旧版点「立即体验」过来的：他此刻唯一的疑问是「这跟我原来那页是不是一回事」，
   // 所以先把对照摆出来。跟入口页同一个约定，不同的是这里对照的是一整屏。
-  const [params] = useSearchParams();
+  const [params, setSearchParams] = useSearchParams();
   const [fromLegacy] = useState(() => params.get('from') === 'legacy');
 
   // 顶部筛选器的当前值。key 是字段名而不是下标：
   // 作者增删筛选器时，已选的值不该跟着错位。
-  const [filterValues, setFilterValues] = useState<Record<string, string>>({});
+  // 初值从 URL 还原（v8）：链接即快照，把当前这屏发给同事，对方打开看到同一套筛选。
+  const [filterValues, setFilterValues] = useState<Record<string, string>>(() => {
+    const f = readJson<Record<string, unknown>>(params.get('f'));
+    if (!f || typeof f !== 'object') return {};
+    return Object.fromEntries(
+      Object.entries(f).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1] !== ''),
+    );
+  });
   // 大盘级时间范围：分析师最常用的动作之一是「只看最近 7 天 / 这一段」。
   // ── 时间筛选：相对意图，而非冻结的绝对区间 ──────────────────────────
   // 看这类数据通常「以时间维度区分、每天点开看最近一段」。所以预设必须是
@@ -101,7 +119,13 @@ export default function DashboardPage() {
     }
     return { kind: 'relative', preset: '7d' };
   };
-  const [dateMode, setDateMode] = useState<DateMode>(defaultDateMode);
+  const [dateMode, setDateMode] = useState<DateMode>(() => {
+    // URL 里的时间模式最优先：分享链接时，「我看到的时间窗口」要原样跟过去。
+    // 相对窗口存的是预设名，对方打开时基于他的「今天」重算——跟 v6 的滚动语义一致。
+    const m = readJson<DateMode>(params.get('dm'));
+    if (m && (m.kind === 'all' || m.kind === 'relative' || m.kind === 'custom')) return m;
+    return defaultDateMode();
+  });
   // 滚动窗口依赖「今天」：自动刷新时一起往前走，开着页面数据也滑动。
   const [now, setNow] = useState<dayjs.Dayjs>(() => dayjs());
 
@@ -134,7 +158,18 @@ export default function DashboardPage() {
   const PRESET_LABEL: Record<string, string> = {
     today: '今日', '7d': '近 7 天', '14d': '近 14 天', '30d': '近 30 天', month: '本月',
   };
-  const [crossFilters, setCrossFilters] = useState<CrossFilter[]>([]);
+  const [crossFilters, setCrossFilters] = useState<CrossFilter[]>(() => {
+    const x = readJson<Array<{ field?: unknown; value?: unknown; from?: unknown }>>(params.get('x'));
+    if (!Array.isArray(x)) return [];
+    return x
+      .filter((c) => c && typeof c.field === 'string' && typeof c.value === 'string')
+      .map((c) => ({
+        id: `${String(c.field)}:${String(c.value)}:url`,
+        field: String(c.field),
+        value: String(c.value),
+        from: typeof c.from === 'string' ? c.from : '链接',
+      }));
+  });
   const [options, setOptions] = useState<Record<string, string[]>>({});
 
   // 布局密度：舒适（默认）与紧凑两档。紧凑档收窄卡片间距与内边距，
@@ -143,6 +178,33 @@ export default function DashboardPage() {
   // 放大：把某一块单独弹大看清。点「放大这一块」时记下它的面板与当前整屏筛选，
   // 弹层里用放大后的高度重画同一份数据，并给一个跳去查询页深链。
   const [focus, setFocus] = useState<{ panel: DashboardPanel; extra: FilterNode | null; note?: string } | null>(null);
+
+  // 整屏状态写回 URL（v8）：筛选值、下钻链、时间模式。
+  // 用 replace：改一个筛选就多一条历史，返回键会变成撤销键（与查询页同一约定）。
+  // 相对时间窗口只存预设名不存绝对日期——对方打开时基于他的「今天」重算，才会同样滚动。
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (Object.values(filterValues).some(Boolean)) next.set('f', JSON.stringify(filterValues));
+    if (crossFilters.length > 0) {
+      next.set(
+        'x',
+        JSON.stringify(crossFilters.map((c) => ({ field: c.field, value: c.value, from: c.from }))),
+      );
+    }
+    next.set('dm', JSON.stringify(dateMode));
+    setSearchParams(next, { replace: true });
+  }, [filterValues, crossFilters, dateMode, setSearchParams]);
+
+  // 把当前这屏（连同筛选状态）发给同事。状态已经在 URL 里，
+  // 这里只是把地址栏交到用户手上——「复制链接」不该让人手动框选地址栏。
+  const shareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      message.success('链接已复制：对方打开即回到当前这屏（筛选、下钻、时间窗口都会跟过去）');
+    } catch {
+      message.warning('浏览器不允许自动复制，请手动复制地址栏链接');
+    }
+  };
 
   // ── 编辑态 ──────────────────────────────────────────────────────
   // 草稿先落在本地，点保存才写库。直接改库的话，拖错一次宽度就得靠撤销接口救，
@@ -501,6 +563,9 @@ export default function DashboardPage() {
           )}
           <Button size="small" icon={<DownloadOutlined />} onClick={exportCsv}>
             导出整屏
+          </Button>
+          <Button size="small" icon={<LinkOutlined />} onClick={shareLink}>
+            复制链接
           </Button>
           <Segmented
             size="small"
