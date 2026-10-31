@@ -10,7 +10,9 @@ import {
   Col,
   DatePicker,
   Empty,
+  Modal,
   Row,
+  Segmented,
   Select,
   Skeleton,
   Space,
@@ -29,6 +31,7 @@ import {
   RightOutlined,
   RollbackOutlined,
   DownloadOutlined,
+  ExportOutlined,
   SaveOutlined,
   UndoOutlined,
 } from '@ant-design/icons';
@@ -79,6 +82,13 @@ export default function DashboardPage() {
   const [dateRange, setDateRange] = useState<[string, string] | null>(null);
   const [crossFilters, setCrossFilters] = useState<CrossFilter[]>([]);
   const [options, setOptions] = useState<Record<string, string[]>>({});
+
+  // 布局密度：舒适（默认）与紧凑两档。紧凑档收窄卡片间距与内边距，
+  // 一屏能多看几块；舒适档留白多，单块读着不挤。
+  const [density, setDensity] = useState<'cozy' | 'compact'>('cozy');
+  // 放大：把某一块单独弹大看清。点「放大这一块」时记下它的面板与当前整屏筛选，
+  // 弹层里用放大后的高度重画同一份数据，并给一个跳去查询页深链。
+  const [focus, setFocus] = useState<{ panel: DashboardPanel; extra: FilterNode | null; note?: string } | null>(null);
 
   // ── 编辑态 ──────────────────────────────────────────────────────
   // 草稿先落在本地，点保存才写库。直接改库的话，拖错一次宽度就得靠撤销接口救，
@@ -355,6 +365,26 @@ export default function DashboardPage() {
     setDateRange(null);
   };
 
+  // 把某一块「原样搬到查询页」：用与面板同一份查询串还原出查询页的 URL，
+  // 并把当前整屏筛选一起带过去（作为 filter JSON）。用户在大盘里看到异常的那块，
+  // 下一步往往是「去查询页换个维度继续挖」，这个链接省掉他重新搭一遍的功夫。
+  const openInQuery = (panel: DashboardPanel, extra: FilterNode | null): string => {
+    const ds = byKey.get(panel.dataset);
+    if (!ds) return '/query';
+    const it = parseIntent(ds, panelQuery(ds, panel.query));
+    const q = new URLSearchParams();
+    q.set('ds', ds.dataset_key);
+    if (it.dims.length) q.set('dims', it.dims.join(','));
+    if (it.metrics.length) q.set('metrics', it.metrics.join(','));
+    if (it.orderBy) {
+      q.set('order', it.orderBy.field);
+      q.set('dir', it.orderBy.desc ? 'desc' : 'asc');
+    }
+    q.set('limit', String(it.limit));
+    if (extra) q.set('filter', JSON.stringify(extra));
+    return `/query?${q.toString()}`;
+  };
+
   return (
     <div>
       <Breadcrumb style={{ fontSize: 12 }} items={[{ title: dashboard.module || '仪表盘' }, { title: dashboard.title }]} />
@@ -408,6 +438,15 @@ export default function DashboardPage() {
           <Button size="small" icon={<DownloadOutlined />} onClick={exportCsv}>
             导出整屏
           </Button>
+          <Segmented
+            size="small"
+            value={density}
+            onChange={(v) => setDensity(v as 'cozy' | 'compact')}
+            options={[
+              { label: '舒适', value: 'cozy' },
+              { label: '紧凑', value: 'compact' },
+            ]}
+          />
           <Select
             size="small"
             style={{ width: 110 }}
@@ -565,7 +604,7 @@ export default function DashboardPage() {
           <Empty description="这张大盘还没有面板" />
         </Card>
       ) : (
-        <Row gutter={[12, 12]}>
+        <Row gutter={density === 'compact' ? [8, 8] : [12, 12]}>
           {panels.map((p) => {
             const extra = extraFor(p);
             const note = extra
@@ -584,6 +623,8 @@ export default function DashboardPage() {
                   extraFilter={extra}
                   filterNote={note}
                   noFollow={p.follow === false}
+                  dense={density === 'compact'}
+                  onFocus={() => setFocus({ panel: p, extra, note })}
                   onPointClick={onPointClick}
                   onDone={onPanelDone}
                   actions={
@@ -622,6 +663,38 @@ export default function DashboardPage() {
           setEditingPanel(null);
         }}
       />
+
+      <Modal
+        open={!!focus}
+        title={focus ? focus.panel.title || '面板' : ''}
+        width={920}
+        onCancel={() => setFocus(null)}
+        footer={
+          focus
+            ? [
+                <Button key="close" onClick={() => setFocus(null)}>
+                  关闭
+                </Button>,
+                <Link key="open" to={openInQuery(focus.panel, focus.extra)}>
+                  <Button type="primary" icon={<ExportOutlined />}>
+                    在查询页打开
+                  </Button>
+                </Link>,
+              ]
+            : null
+        }
+        styles={{ body: { padding: 12 } }}
+      >
+        {focus && (
+          <DashboardPanelCard
+            panel={{ ...focus.panel, height: 460 }}
+            dataset={byKey.get(focus.panel.dataset)}
+            extraFilter={focus.extra}
+            filterNote={focus.note}
+            noFollow={focus.panel.follow === false}
+          />
+        )}
+      </Modal>
     </div>
   );
 }

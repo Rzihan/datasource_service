@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Card, Empty, Skeleton, Space, Table, Tag, Tooltip, Typography } from 'antd';
-import { DatabaseOutlined, InfoCircleOutlined, RedoOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, ExpandOutlined, InfoCircleOutlined, RedoOutlined } from '@ant-design/icons';
 import type { DashboardPanel, QueryDataset, QueryResult, StringMap } from '../types';
 import { executeQuery } from '../api';
 import type { FilterNode } from '../types';
@@ -37,6 +37,10 @@ interface Props {
   // 编辑态下挂在卡片右上角的操作（改 / 删）。放在外面而不是卡片自己决定：
   // 「能不能编辑」是大盘的事，不是面板的事。
   actions?: React.ReactNode;
+  // 放大：把这一块弹到大尺寸里单独读。常在「这一块看着不对，想看清楚」时用。
+  onFocus?: () => void;
+  // 紧凑布局：收窄卡片内边距、指标主数字略小。大盘切到「紧凑」档时整屏过一遍。
+  dense?: boolean;
   // 把结果回报给大盘：整屏导出要按面板分段写，
   // 而数据是面板自己取的，大盘拿不到。
   onDone?: (info: PanelResult) => void;
@@ -68,6 +72,8 @@ export default function DashboardPanelCard({
   filterNote,
   noFollow,
   actions,
+  onFocus,
+  dense,
   onDone,
 }: Props) {
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -265,7 +271,7 @@ export default function DashboardPanelCard({
           <Tooltip title={`完整值 ${data.totalText}`}>
             <div
               style={{
-                fontSize: 28,
+                fontSize: dense ? 24 : 28,
                 fontWeight: 600,
                 lineHeight: 1.18,
                 whiteSpace: 'nowrap',
@@ -365,6 +371,11 @@ export default function DashboardPanelCard({
       }
       extra={
         <Space size={6}>
+          {onFocus && (
+            <Tooltip title="放大这一块">
+              <Button size="small" type="text" icon={<ExpandOutlined />} onClick={onFocus} />
+            </Tooltip>
+          )}
           {actions}
           {result?.truncated && (
             <Tooltip title="结果被截断了：这一块看到的不是全量，下结论前要留意">
@@ -378,7 +389,7 @@ export default function DashboardPanelCard({
           </Typography.Text>
         </Space>
       }
-      styles={{ body: { height: panel.height, overflow: 'auto', padding: 8 } }}
+      styles={{ body: { height: panel.height, overflow: 'auto', padding: dense ? 4 : 8 } }}
       style={{ height: '100%' }}
     >
       {body()}
