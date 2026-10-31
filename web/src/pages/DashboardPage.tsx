@@ -44,6 +44,7 @@ import PanelEditor from '../components/PanelEditor';
 import { panelQuery, parseIntent } from '../utils/intent';
 import { recordVisit } from '../utils/migration';
 import { findLegacyPage } from '../utils/legacyPages';
+import { markOpened } from '../utils/dashboardPrefs';
 
 // 一次「点图形下钻出来的整屏筛选」。它跟顶部声明的筛选器是两回事：
 // 声明的是作者钉好的常用维度，这个是看的人临时追问「这个柱子是谁」。
@@ -270,6 +271,12 @@ export default function DashboardPage() {
   useEffect(() => {
     if (dashboard?.legacy) recordVisit(dashboard.legacy, 'entry');
   }, [dashboard]);
+
+  // 记一笔个人使用痕迹（v9）：仪表盘列表拿它做「最近打开」与常用排序。
+  // 记在本地——这是我自己的查看习惯，不该写进后端变成别人的配置。
+  useEffect(() => {
+    if (dashKey) markOpened(dashKey);
+  }, [dashKey]);
 
   // 筛选器的候选值从真实数据里取。手敲的候选值会跟数据脱节——
   // 新增了一个团队，下拉里却没有，筛选器就变成了「看起来能筛实际筛不到」。
