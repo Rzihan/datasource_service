@@ -5,7 +5,7 @@ import type { DashboardPanel, QueryDataset, QueryResult, StringMap } from '../ty
 import { executeQuery } from '../api';
 import type { FilterNode } from '../types';
 import { pruneEmpty } from '../utils/filterTree';
-import { abbrText } from '../utils/format';
+import { abbrText, columnDigits, formatNumber, numericText, parseScaled } from '../utils/format';
 import { toNumber } from '../utils/number';
 import { panelQuery, parseIntent } from '../utils/intent';
 import { buildPanelData } from '../utils/panelData';
@@ -207,6 +207,35 @@ export default function DashboardPanelCard({
     return { pct: ((last - prev) / Math.abs(prev)) * 100, up: last >= prev };
   }, [trend]);
 
+  // 明细表的列元数据：数值列按「这一列的值」判定（与查询页同一套规则），
+  // 用于右对齐、千分位与排序。指标列也可能返回非数值（配置写错），
+  // 那时退回原样显示，不静默变成 0。
+  const tableMeta = useMemo(() => {
+    if (!result) return [];
+    return result.columns.map((c, i) => {
+      const values = result.rows.map((r) => r[i]);
+      const isMetric = metrics.includes(c.name);
+      const numeric = isMetric && values.some((v) => numericText(v) !== null);
+      return { name: c.name, numeric, digits: numeric ? columnDigits(values) : 0 };
+    });
+  }, [result, metrics]);
+
+  // 明细表排序：数值按定点比较（不经过 float），维度按中文拼音序。
+  // 与查询页同一套语义——两边排出来的顺序必须一致，否则用户会以为有一边是错的。
+  const compareCell = (i: number, a: Record<string, unknown>, b: Record<string, unknown>) => {
+    const m = tableMeta[i];
+    if (!m) return 0;
+    const av = a[result!.columns[i].name];
+    const bv = b[result!.columns[i].name];
+    if (m.numeric) {
+      const x = parseScaled(av, m.digits);
+      const y = parseScaled(bv, m.digits);
+      if (x === null || y === null) return x === y ? 0 : x === null ? -1 : 1;
+      return x < y ? -1 : x > y ? 1 : 0;
+    }
+    return String(av ?? '').localeCompare(String(bv ?? ''), 'zh-CN');
+  };
+
   // 回报结果：导出与「几块就绪」都靠它。维度名用中文（labelMap 由大盘侧翻译）。
   useEffect(() => {
     if (!onDone) return;
@@ -318,12 +347,28 @@ export default function DashboardPanelCard({
           dataSource={result.rows.map((r, i) => ({ key: i, ...Object.fromEntries(r.map((v, c) => [result.columns[c].name, v])) }))}
           scroll={{ y: bodyHeight }}
           pagination={false}
-          columns={result.columns.map((c) => ({
-            title: labelMap[c.name] || c.name,
-            dataIndex: c.name,
-            ellipsis: true,
-            render: (v: unknown) => (v === null || v === undefined ? <Typography.Text type="secondary">—</Typography.Text> : String(v)),
-          }))}
+          columns={result.columns.map((c, i) => {
+            const m = tableMeta[i];
+            return {
+              title: labelMap[c.name] || c.name,
+              dataIndex: c.name,
+              ellipsis: true,
+              // 数值右对齐 + 等宽数字：纵向扫一列时位数才对得齐
+              align: (m?.numeric ? 'right' : 'left') as 'right' | 'left',
+              // 本地排序：数据已在内存里，「谁最高」不该回查询页重设排序再查一遍
+              sorter: (a: Record<string, unknown>, b: Record<string, unknown>) => compareCell(i, a, b),
+              render: (v: unknown) => {
+                if (v === null || v === undefined) {
+                  return <Typography.Text type="secondary">—</Typography.Text>;
+                }
+                if (m?.numeric) {
+                  const t = formatNumber(v, m.digits);
+                  if (t !== null) return <span style={{ fontVariantNumeric: 'tabular-nums' }}>{t}</span>;
+                }
+                return String(v);
+              },
+            };
+          })}
         />
       );
     }
