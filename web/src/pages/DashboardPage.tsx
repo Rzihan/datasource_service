@@ -7,6 +7,7 @@ import {
   Breadcrumb,
   Button,
   Card,
+  Checkbox,
   Col,
   DatePicker,
   Empty,
@@ -104,7 +105,7 @@ export default function DashboardPage() {
   // 清空只清当次（不写存储），下次打开仍回到记住的模式（默认近 7 天）。
   type DateMode =
     | { kind: 'all' }
-    | { kind: 'relative'; preset: 'today' | '7d' | '14d' | '30d' | 'month' }
+    | { kind: 'relative'; preset: 'today' | '7d' | '14d' | '30d' | 'month'; includeToday?: boolean }
     | { kind: 'custom'; start: string; end: string };
 
   const DATE_MODE_KEY = 'dashboard:dateMode';
@@ -131,18 +132,22 @@ export default function DashboardPage() {
   const [now, setNow] = useState<dayjs.Dayjs>(() => dayjs());
 
   // 由模式 + 今天算出实际绝对窗口。relative 每次基于 now 重算 → 永远滚动到今天。
+  // includeToday=false 时窗口止于昨天：今天的数据往往只到当前时刻，是不完整的，
+  // 拿它算环比会把「较昨日」拉低成噪声——要看完整天的人可以关掉它。
   const resolveWindow = (mode: DateMode, base: dayjs.Dayjs): [string, string] | null => {
     if (mode.kind === 'all') return null;
     if (mode.kind === 'custom') return [mode.start, mode.end];
+    const includeToday = mode.includeToday ?? true;
+    const end = includeToday ? base : base.subtract(1, 'day');
     let start: dayjs.Dayjs;
     switch (mode.preset) {
       case 'today': start = base.startOf('day'); break;
-      case '7d': start = base.subtract(6, 'day'); break;
-      case '14d': start = base.subtract(13, 'day'); break;
-      case '30d': start = base.subtract(29, 'day'); break;
-      case 'month': start = base.startOf('month'); break;
+      case '7d': start = end.subtract(6, 'day'); break;
+      case '14d': start = end.subtract(13, 'day'); break;
+      case '30d': start = end.subtract(29, 'day'); break;
+      case 'month': start = end.startOf('month'); break;
     }
-    return [start.format('YYYY-MM-DD'), base.format('YYYY-MM-DD')];
+    return [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')];
   };
   // 应用一个模式：persist=true 写进 localStorage（记住选择）；清空类操作传 false（仅当次）。
   const applyMode = (mode: DateMode, persist: boolean) => {
@@ -159,6 +164,9 @@ export default function DashboardPage() {
   const PRESET_LABEL: Record<string, string> = {
     today: '今日', '7d': '近 7 天', '14d': '近 14 天', '30d': '近 30 天', month: '本月',
   };
+  // 相对窗口的名字：关掉「含今天」时把口径说出来，免得「近 7 天」和面板日期对不上
+  const relativeName = (m: Extract<DateMode, { kind: 'relative' }>) =>
+    PRESET_LABEL[m.preset] + (m.preset !== 'today' && !(m.includeToday ?? true) ? '（到昨天）' : '');
   const [crossFilters, setCrossFilters] = useState<CrossFilter[]>(() => {
     const x = readJson<Array<{ field?: unknown; value?: unknown; from?: unknown }>>(params.get('x'));
     if (!Array.isArray(x)) return [];
@@ -421,7 +429,7 @@ export default function DashboardPage() {
         ...(dateWindow
           ? [
               dateMode.kind === 'relative'
-                ? `${PRESET_LABEL[dateMode.preset]}（${dateWindow[0]}~${dateWindow[1]}）`
+                ? `${relativeName(dateMode)}（${dateWindow[0]}~${dateWindow[1]}）`
                 : `日期 ${dateWindow[0]}~${dateWindow[1]}`,
             ]
           : []),
@@ -649,7 +657,15 @@ export default function DashboardPage() {
                       true,
                     );
                   } else {
-                    applyMode({ kind: 'relative', preset: val as 'today' | '7d' | '14d' | '30d' | 'month' }, true);
+                    // 切预设时保留「含今天」的开关状态——那是同一个完整天偏好，不随预设重置
+                    applyMode(
+                      {
+                        kind: 'relative',
+                        preset: val as 'today' | '7d' | '14d' | '30d' | 'month',
+                        includeToday: dateMode.kind === 'relative' ? (dateMode.includeToday ?? true) : true,
+                      },
+                      true,
+                    );
                   }
                 }}
                 options={[
@@ -662,6 +678,20 @@ export default function DashboardPage() {
                   { label: '自定义', value: '__custom__' },
                 ]}
               />
+            )}
+            {hasDatePanel && dateMode.kind === 'relative' && dateMode.preset !== 'today' && (
+              // 「含今天」默认开：大多数时候想连今天一起看。
+              // 但今天的数据只到当前时刻，是不完整的——拿它算环比会被拉低。
+              // 要完整天的人关掉它，窗口改为止于昨天，跨预设切换时这个偏好保留。
+              <Tooltip title="今天的数据往往只到当前时刻，是不完整的。关掉后按「到昨天」的完整天计算，环比不会被半截数据拉低">
+                <Checkbox
+                  checked={dateMode.includeToday ?? true}
+                  onChange={(e) => applyMode({ ...dateMode, includeToday: e.target.checked }, true)}
+                  style={{ fontSize: 12 }}
+                >
+                  含今天
+                </Checkbox>
+              </Tooltip>
             )}
             {hasDatePanel && dateMode.kind === 'custom' && (
               <DatePicker.RangePicker
