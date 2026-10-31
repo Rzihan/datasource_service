@@ -77,9 +77,63 @@ export default function DashboardPage() {
   // 作者增删筛选器时，已选的值不该跟着错位。
   const [filterValues, setFilterValues] = useState<Record<string, string>>({});
   // 大盘级时间范围：分析师最常用的动作之一是「只看最近 7 天 / 这一段」。
-  // 值以 'YYYY-MM-DD' 存，应用时拆成 date >= / date <= 两个条件，
-  // 只作用于「有 date 维度」的面板——没有时间轴的面板强行加日期会直接查空。
-  const [dateRange, setDateRange] = useState<[string, string] | null>(null);
+  // ── 时间筛选：相对意图，而非冻结的绝对区间 ──────────────────────────
+  // 看这类数据通常「以时间维度区分、每天点开看最近一段」。所以预设必须是
+  // 「相对窗口」（近 7 天 = 到今天的近 7 天），每次取数/自动刷新都基于「今天」
+  // 重算，才会每天自动滚动，而不是点一次就固定在某段日期上再也不变。
+  // 模式记进 localStorage：相对窗口永远滚到今天；手动选的固定区间也保留；
+  // 清空只清当次（不写存储），下次打开仍回到记住的模式（默认近 7 天）。
+  type DateMode =
+    | { kind: 'all' }
+    | { kind: 'relative'; preset: 'today' | '7d' | '14d' | '30d' | 'month' }
+    | { kind: 'custom'; start: string; end: string };
+
+  const DATE_MODE_KEY = 'dashboard:dateMode';
+  const defaultDateMode = (): DateMode => {
+    try {
+      const raw = localStorage.getItem(DATE_MODE_KEY);
+      if (raw) {
+        const m = JSON.parse(raw) as DateMode;
+        if (m && (m.kind === 'all' || m.kind === 'relative' || m.kind === 'custom')) return m;
+      }
+    } catch {
+      /* 存储坏了就回退默认 */
+    }
+    return { kind: 'relative', preset: '7d' };
+  };
+  const [dateMode, setDateMode] = useState<DateMode>(defaultDateMode);
+  // 滚动窗口依赖「今天」：自动刷新时一起往前走，开着页面数据也滑动。
+  const [now, setNow] = useState<dayjs.Dayjs>(() => dayjs());
+
+  // 由模式 + 今天算出实际绝对窗口。relative 每次基于 now 重算 → 永远滚动到今天。
+  const resolveWindow = (mode: DateMode, base: dayjs.Dayjs): [string, string] | null => {
+    if (mode.kind === 'all') return null;
+    if (mode.kind === 'custom') return [mode.start, mode.end];
+    let start: dayjs.Dayjs;
+    switch (mode.preset) {
+      case 'today': start = base.startOf('day'); break;
+      case '7d': start = base.subtract(6, 'day'); break;
+      case '14d': start = base.subtract(13, 'day'); break;
+      case '30d': start = base.subtract(29, 'day'); break;
+      case 'month': start = base.startOf('month'); break;
+    }
+    return [start.format('YYYY-MM-DD'), base.format('YYYY-MM-DD')];
+  };
+  // 应用一个模式：persist=true 写进 localStorage（记住选择）；清空类操作传 false（仅当次）。
+  const applyMode = (mode: DateMode, persist: boolean) => {
+    setDateMode(mode);
+    if (persist) {
+      try {
+        localStorage.setItem(DATE_MODE_KEY, JSON.stringify(mode));
+      } catch {
+        /* 忽略写入失败 */
+      }
+    }
+  };
+  const dateWindow = resolveWindow(dateMode, now); // 供 extraFor / note 复用，随 now 滚动
+  const PRESET_LABEL: Record<string, string> = {
+    today: '今日', '7d': '近 7 天', '14d': '近 14 天', '30d': '近 30 天', month: '本月',
+  };
   const [crossFilters, setCrossFilters] = useState<CrossFilter[]>([]);
   const [options, setOptions] = useState<Record<string, string[]>>({});
 
@@ -120,6 +174,7 @@ export default function DashboardPage() {
     const timer = setInterval(() => {
       setReloadToken((v) => v + 1);
       setRefreshedAt(new Date());
+      setNow(dayjs()); // 滚动窗口随刷新往前滑
     }, autoSeconds * 1000);
     return () => clearInterval(timer);
   }, [autoSeconds]);
@@ -210,14 +265,15 @@ export default function DashboardPage() {
       }
       // 时间范围：拆成两个边界条件，落在 date 维度上。
       // 有 date 维度的面板才加，否则那个面板会被一个不存在的字段筛成空。
-      if (dateRange && hasField(ds, 'date')) {
-        leaves.push({ field: 'date', op: '>=', value: dateRange[0] });
-        leaves.push({ field: 'date', op: '<=', value: dateRange[1] });
+      // 用的是「基于今天的滚动窗口」——相对预设每次都重新算到今天。
+      if (dateWindow && hasField(ds, 'date')) {
+        leaves.push({ field: 'date', op: '>=', value: dateWindow[0] });
+        leaves.push({ field: 'date', op: '<=', value: dateWindow[1] });
       }
       if (leaves.length === 0) return null;
       return { logic: 'and', children: leaves };
     },
-    [byKey, dashboard, filterValues, crossFilters, dateRange],
+    [byKey, dashboard, filterValues, crossFilters, dateWindow, now],
   );
 
   // 点图形 → 把它对应的类目变成整屏筛选。
@@ -292,7 +348,14 @@ export default function DashboardPage() {
     chunks.push(`# 导出时间 ${stamp}`);
     if (activeCount > 0) {
       const parts = [
-        ...(dateRange ? [`日期 ${dateRange[0]}~${dateRange[1]}`] : []),
+        // 相对窗口在口径里写「近 7 天（10-25~10-31）」：既说明是滚动意图，也留下当时实际窗口
+        ...(dateWindow
+          ? [
+              dateMode.kind === 'relative'
+                ? `${PRESET_LABEL[dateMode.preset]}（${dateWindow[0]}~${dateWindow[1]}）`
+                : `日期 ${dateWindow[0]}~${dateWindow[1]}`,
+            ]
+          : []),
         ...filters.filter((f) => filterValues[f.field]).map((f) => `${f.label || f.field}=${filterValues[f.field]}`),
         ...crossFilters.map((c) => `${c.field}=${c.value}`),
       ];
@@ -347,7 +410,7 @@ export default function DashboardPage() {
   const followCount = dashboard.panels.filter((p) => p.follow !== false).length;
   const noFollowCount = dashboard.panels.length - followCount;
   const activeCount =
-    Object.values(filterValues).filter(Boolean).length + crossFilters.length + (dateRange ? 1 : 0);
+    Object.values(filterValues).filter(Boolean).length + crossFilters.length + (dateMode.kind !== 'all' ? 1 : 0);
   // 有没有「带 date 维度的面板」决定要不要露时间范围控件：
   // 一屏全是按团队/场景汇总、没有时间轴的，给个日期选择器只会让人白点。
   const hasDatePanel = panels.some((p) => {
@@ -362,7 +425,8 @@ export default function DashboardPage() {
   const clearAllFilters = () => {
     setFilterValues({});
     setCrossFilters([]);
-    setDateRange(null);
+    // 清空只作用于当次：不写 localStorage，下次打开仍回到记住的时间模式（默认近 7 天）。
+    applyMode({ kind: 'all' }, false);
   };
 
   // 把某一块「原样搬到查询页」：用与面板同一份查询串还原出查询页的 URL，
@@ -490,23 +554,59 @@ export default function DashboardPage() {
               <FilterOutlined /> 整屏筛选
             </Typography.Text>
             {hasDatePanel && (
+              // 时间模式直接露在筛选项里：选中的是「相对窗口」还是「自定义固定区间」一眼可见。
+              // 相对窗口（近 7 天等）每次取数都基于今天重算——每天打开、每次刷新都会滚到最新。
+              <Segmented
+                size="small"
+                value={
+                  dateMode.kind === 'relative'
+                    ? dateMode.preset
+                    : dateMode.kind === 'custom'
+                      ? '__custom__'
+                      : '__all__'
+                }
+                onChange={(v) => {
+                  const val = String(v);
+                  if (val === '__all__') {
+                    applyMode({ kind: 'all' }, false);
+                  } else if (val === '__custom__') {
+                    // 进入自定义：先给一个「近 7 天」的绝对区间作起点，用户再改
+                    const end = dayjs();
+                    applyMode(
+                      { kind: 'custom', start: end.subtract(6, 'day').format('YYYY-MM-DD'), end: end.format('YYYY-MM-DD') },
+                      true,
+                    );
+                  } else {
+                    applyMode({ kind: 'relative', preset: val as 'today' | '7d' | '14d' | '30d' | 'month' }, true);
+                  }
+                }}
+                options={[
+                  { label: '全部', value: '__all__' },
+                  { label: '今日', value: 'today' },
+                  { label: '近 7 天', value: '7d' },
+                  { label: '近 14 天', value: '14d' },
+                  { label: '近 30 天', value: '30d' },
+                  { label: '本月', value: 'month' },
+                  { label: '自定义', value: '__custom__' },
+                ]}
+              />
+            )}
+            {hasDatePanel && dateMode.kind === 'custom' && (
               <DatePicker.RangePicker
                 size="small"
                 style={{ width: 210 }}
-                value={dateRange ? [dayjs(dateRange[0]), dayjs(dateRange[1])] : null}
+                value={[dayjs(dateMode.start), dayjs(dateMode.end)]}
                 format="MM-DD"
                 allowClear
                 placeholder={['开始', '结束']}
                 onChange={(v) =>
-                  setDateRange(
-                    v && v[0] && v[1] ? [v[0].format('YYYY-MM-DD'), v[1].format('YYYY-MM-DD')] : null,
-                  )
+                  v && v[0] && v[1]
+                    ? applyMode(
+                        { kind: 'custom', start: v[0].format('YYYY-MM-DD'), end: v[1].format('YYYY-MM-DD') },
+                        true,
+                      )
+                    : applyMode({ kind: 'all' }, false)
                 }
-                presets={[
-                  { label: '近 7 天', value: [dayjs().subtract(6, 'day'), dayjs()] },
-                  { label: '近 14 天', value: [dayjs().subtract(13, 'day'), dayjs()] },
-                  { label: '近 30 天', value: [dayjs().subtract(29, 'day'), dayjs()] },
-                ]}
               />
             )}
             {filters.map((f) => (
@@ -609,7 +709,7 @@ export default function DashboardPage() {
             const extra = extraFor(p);
             const note = extra
               ? [
-                  ...(dateRange ? [`日期 ${dateRange[0]}~${dateRange[1]}`] : []),
+                  ...(dateWindow ? [`日期 ${dateWindow[0]}~${dateWindow[1]}`] : []),
                   ...filters.filter((f) => filterValues[f.field]).map((f) => `${f.label || f.field}=${filterValues[f.field]}`),
                   ...crossFilters.map((c) => `${labelOf(c.field)}=${c.value}`),
                 ].join('、')
