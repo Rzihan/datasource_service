@@ -115,6 +115,13 @@ export default function ChartView({
     // 总量为 0 或含负数导致占比失去意义时，退回只显示数值。
     const total = pieData.reduce((s, d) => s + d.y, 0);
     const pct = (y: number) => (total > 0 ? `${((y / total) * 100).toFixed(1)}%` : null);
+    // 饼图标签原来是「每个扇区外侧标名字」——类目一多，外侧标签互相压、
+    // 还跟右侧图例挤在一起（「漏标/误标」叠在「缺陷数」上就是这么来的）。
+    // 改成：名字交给图例（颜色对名字），扇区内只标占比，且只有「够宽」的扇区才标。
+    // 8% 是个物理下限——小于它的扇区连「6%」这三个字都放不下，
+    // 十几个等分扇区各标一个 6% 只会叠成一团（场景分布就是这样）。
+    // 大扇区标比例，小扇区交给图例与 tooltip，反而更清楚。
+    const PIE_LABEL_MIN = 8;
     return (
       <LPie
         data={pieData}
@@ -123,7 +130,14 @@ export default function ChartView({
         height={height}
         autoFit
         onReady={({ chart }: { chart: unknown }) => bindClick(chart)}
-        label={{ text: (d: { x: string; raw: string }) => d.x, position: 'outside' }}
+        label={{
+          text: (d: { y: number }) => {
+            const p = total > 0 ? (d.y / total) * 100 : 0;
+            return p >= PIE_LABEL_MIN ? `${p.toFixed(0)}%` : '';
+          },
+          position: 'inside',
+          style: { fill: '#fff', fontSize: 11, fontWeight: 500 },
+        }}
         legend={{ position: 'right' }}
         tooltip={{
           items: [
@@ -168,6 +182,18 @@ export default function ChartView({
     if (series.length > 1) cfg.transform = stacked ? [{ type: 'stackY' }] : [{ type: 'dodgeX' }];
     // 系列少、类目也少时柱子会铺满整格，糊成一条色块，用 band padding 收窄
     if (series.length <= 2) cfg.scale = { x: { padding: 0.6 } };
+    // 单系列柱状图在柱顶标数值：比大小靠的是「差多少」，不是「目测谁高一点」。
+    // 多系列（dodge/stack）不标——一排数字会盖住柱子本身。
+    if (series.length === 1) {
+      cfg.label = {
+        text: (d: ChartPoint) => compactNumber(Number(d.y ?? 0)),
+        position: 'top',
+        // 数字要抬到柱顶之上；再给一圈白描边做衬底，
+        // 万一柱子顶到轴上（没有余量抬），白描边也能保证深色字看得清。
+        dy: -14,
+        style: { fontSize: 11, fill: '#1f1f1f', fontWeight: 500, stroke: '#fff', lineWidth: 3 },
+      };
+    }
     return <LColumn {...cfg} />;
   }
   return <LLine {...cfg} />;
